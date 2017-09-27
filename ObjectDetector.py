@@ -63,7 +63,7 @@ class ObjectDetector(object):
 
     def __get_objects_coordinates(self,labeled_image = None):
         """
-        Gets the corrdinates of the square surrounding the object and rest
+        Gets the coordinates of the square surrounding the object and rest
         """
         if self.regions:
             return self.regions
@@ -83,20 +83,16 @@ class ObjectDetector(object):
         """
         minr, maxr, minc, maxc = region
         img_section = self.img_src[minr:maxr, minc:maxc]
-        #pil_image = Image.fromarray(img_section)
         sample = resize(img_section,shape)
-        #sample = pil_image.resize(shape)
-        #sample = np.array(sample.getdata(),np.uint8)
 
         if ravel:
             return sample.ravel()
         else:
-            #return sample.reshape((20,20))
             return sample
 
     def generate_matrix(self, l_image):
         """
-        crops resizes and ravels the image 
+            crops resizes and ravels the image 
         """
         labeled_image = l_image
         regions = self.__get_objects_coordinates(labeled_image)
@@ -115,6 +111,10 @@ class ObjectDetector(object):
         return np_matrix[:counter, :].copy()
 
     def get_object_detected_image(self, l_image):
+        """
+            Colorizes the image and puts a rectangle around the different zones 
+            considered to be noisy. 
+        """
         label_image = l_image
         image_label_overlay = label2rgb(label_image, image=self.img_src)
         for region in measure.regionprops(label_image):
@@ -132,6 +132,9 @@ class ObjectDetector(object):
         return image_label_overlay
 
     def patch(self, l_image):
+        """
+            Puts a black rectangle over the regions considered to be noisy to the further analisys.
+        """
         label_image = l_image
         patched_image = self.img_src.copy()
         for region in measure.regionprops(label_image):
@@ -147,13 +150,13 @@ class ObjectDetector(object):
             rr, cc = polygon(r = [minr,minr,maxr,maxr], c = [minc,maxc,maxc,minc],shape =self.img_src.shape)
             patched_image[rr,cc] = 0
         return patched_image
-        
-        
 
 
 def process_bn_image(file_path, matrix_path = None, image_path = None, patch_dir = None, regions_path = None):
     """
-        Proccess to be applied to a single image
+        Proccess to be applied to a single image includes loading the image, getting the labels 
+        of  different regions, filtering the desired ones, create a region labeled image and deleting 
+        the regions considered to be noisy.
     """
     object_detector = ObjectDetector(file_path)
     if regions_path :
