@@ -1,4 +1,7 @@
 
+import matplotlib
+matplotlib.use('qt5agg')
+import scipy.interpolate as spi
 import matplotlib.pyplot as plt
 import numpy as np
 import re
@@ -19,7 +22,7 @@ from functools import reduce
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('file_path', help = "path to the file or directory to be oppened")
+parser.add_argument('file_path', help = "path to the file or directory to be oppened the saved labels MUST be in this directory")
 parser.add_argument('-m', '--matrix', help = "Path to the matrix output file ")
 parser.add_argument('-i', '--imagepath', help= "Save the object detected image to a path")
 parser.add_argument('-o', "--outdir", help = "Directory where to ouput the processed matrix images")
@@ -163,12 +166,10 @@ class ObjectDetector(object):
 
         }
         patched_image = dilation(patched_image)
-        patched_image = resize(patched_image,(512,1024))
+        patched_image = resize(patched_image,(128,1024*4))
         withe_pixels = np.column_stack(np.where(patched_image > 0))
-        print(withe_pixels.shape)
-        #knn_graph = kneighbors_graph(withe_pixels, 30, include_self=True)
-        #clusterer = AgglomerativeClustering(n_clusters=4, linkage='average', connectivity=None, affinity="manhattan")
-        clusterer = KMeans(n_clusters=400, precompute_distances=True)
+        print('Pixels detected: ' + str(withe_pixels.shape[0]))
+        clusterer = KMeans(n_clusters=1024, precompute_distances=True, n_jobs=2)
         labels = clusterer.fit_predict(withe_pixels)
         return withe_pixels, labels, patched_image, clusterer.cluster_centers_
         
@@ -204,17 +205,20 @@ def process_bn_image(file_path,**kwargs):
         patched = object_detector.patch(labeled_image)
         if patch_dir:
             imsave(patch_dir,patched)
+        expanded_image = [patched[i*512:(i+1)*512,:] for i in range(4)]
+        patched = np.concatenate(expanded_image, axis = 1)
         coordinates, labels, small_patched, centers  = object_detector.get_super_cluster(patched)
         labels += 1
-        l_im = patched.copy()
+        l_im = small_patched.copy()
         for label in np.unique(labels):
             cord = coordinates[labels == label, :]
             l_im[cord[:,0],cord[:,1]] = label  
         l_im = label2rgb(l_im,small_patched)
         for center in centers:
-            rr, cc = circle(r = center[0], c = center[1], radius = 20, shape =  small_patched.shape)
+            rr, cc = circle(r = center[0], c = center[1], radius = 2, shape =  small_patched.shape)
             l_im[rr,cc] = (0,0,1)
         imsave(clusters_path,l_im)
+        np.save(clusters_path[:-4],centers)
     elif patch_dir:
         imsave(patch_dir,object_detector.patch(labeled_image))
 
@@ -280,6 +284,8 @@ if __name__ == "__main__":
             imsave(args.patch, object_detector.patch(labeled_image))
         if args.cluster:
             image = object_detector.patch(labeled_image)
+            expanded_image = [image[i*512:(i+1)*512,:] for i in range(4)]
+            image = np.concatenate(expanded_image, axis = 1)
             coordinates, labels, small_patched, centers  = object_detector.get_super_cluster(image)
             labels += 1
             l_im = small_patched.copy()
@@ -287,7 +293,6 @@ if __name__ == "__main__":
                 cord = coordinates[labels == label, :]
                 l_im[cord[:,0],cord[:,1]] = label  
             l_im = label2rgb(l_im,small_patched)
-            print(l_im[0,0])
             for center in centers:
                 rr, cc = circle(r = center[0], c = center[1], radius = 2, shape =  small_patched.shape)
                 l_im[rr,cc] = (0,0,1)
