@@ -17,6 +17,7 @@ from skimage.filters import threshold_otsu
 from skimage.morphology import square, binary_closing, closing, dilation
 from skimage.transform import resize
 from skimage import measure
+from skimage.util import img_as_uint, img_as_ubyte, img_as_float
 from operator import mul
 from functools import reduce
 import argparse
@@ -29,8 +30,10 @@ parser.add_argument('-o', "--outdir", help = "Directory where to ouput the proce
 parser.add_argument('-imd', '--imagedir', help = "Directory where to put the labeled images" )
 parser.add_argument('-p', '--patch', help = "Patch regions considered to be noise")
 parser.add_argument('-pd', '--patchdir', help = "Location of patched images")
+parser.add_argument('-e', '--expand', help = "Expand image when patching", default = False, action = 'store_true')
 parser.add_argument('-c','--cluster', help = "Once patched perform clustering")
 parser.add_argument('-cd', '--clusterdir', help = "Cluster dir for batch clurstering images")
+parser.add_argument('--use_patched', help = "When clustering, use this option to load just the patched versions of the images")
 
 
 class ObjectDetector(object):
@@ -39,6 +42,8 @@ class ObjectDetector(object):
     """
 
     RECTANGLE_TOLERANCE = 0.80
+
+
 
 
     
@@ -138,7 +143,72 @@ class ObjectDetector(object):
             image_label_overlay [rr,cc] = (1,0,0)
         return image_label_overlay
 
-    def patch(self, l_image, margin = 5):
+    def __find_base_lines(self, patched):
+        partial_sum = np.sum(patched,axis=1)
+        candidates = {}
+        window_size = patched.shape[0]//4
+        for i in range(patched.shape[0]-window_size):
+            local_max = np.argmax(partial_sum[i:i+window_size])
+            if not candidates.get(local_max+i):
+                candidates[local_max+i] = 1
+            else:
+                candidates[local_max+i] += 1
+        if len(candidates) > 4:
+            items = list(map(lambda x: (x[1],x[0]) ,candidates.items()))
+            items.sort(reverse=True)
+            retval =  list(map(lambda x: x[1],items))
+        elif len(candidates) == 4:
+             retval = list(map(lambda x: x[1],items))
+        else:
+            raise Exception('Something went really bad here David :(')
+
+        return retval[:4]
+
+
+    def __expand_image(self,patched,base_lines):
+        base_lines.sort()
+        sections = []
+        first_base_line = base_lines.pop(0)
+        difference = first_base_line - patched.shape[0]//8 
+        slice_size = patched.shape[0]//8
+        if difference <= 0:
+            first_piece = patched[:first_base_line + slice_size,:]
+
+            if difference < 0:
+                x = np.zeros((-difference,patched.shape[1]))
+                first_piece = np.concatenate((x,first_piece), axis = 0)
+
+        else:
+            first_piece = patched[first_base_line - slice_size : first_base_line + slice_size,:]
+
+        sections.append(first_piece)
+
+        last_base_line = base_lines.pop()
+        difference = last_base_line + slice_size
+
+        if difference >= patched.shape[0]:
+            last_piece = patched[last_base_line-slice_size:,:]
+            if difference > patched.shape[0]:
+                 x = np.zeros((difference - patched.shape[0], patched.shape[1]))
+                 last_piece = np.concatenate((last_piece,x), axis = 0)
+            
+        else:
+            last_piece = patched[last_base_line - slice_size: last_base_line + slice_size,:]
+
+
+        for base_line in base_lines:
+            sections.append(patched[base_line-slice_size:base_line+slice_size])
+
+        sections.append(last_piece)
+        retval =  np.concatenate(sections, axis = 1)
+        
+        return retval/np.max(retval)
+
+            
+
+        
+
+    def patch(self, l_image, margin = 10,borders_delete = 40, expand = False):
         """
             Puts a black rectangle over the regions considered to be noisy to the further analisys.
         """
@@ -156,6 +226,18 @@ class ObjectDetector(object):
                 continue
             rr, cc = polygon(r = [minr-margin,minr-margin,maxr+margin,maxr+margin], c = [minc-margin,maxc+margin,maxc+margin,minc-margin],shape =self.img_src.shape)
             patched_image[rr,cc] = 0
+            # Erase Margins
+            patched_image[:borders_delete,:] = 0
+            patched_image[:,:borders_delete] = 0
+            patched_image[-borders_delete:,:] = 0
+            patched_image[:,-borders_delete:] = 0
+        try:
+            if expand:
+                base_lines = self.__find_base_lines(patched_image)
+                return self.__expand_image(patched_image,base_lines)
+        except Exception:
+            pass
+                
         return patched_image
     
     def get_super_cluster(self,patched_image = None, clusterer_type = 'kmeans'):
@@ -165,14 +247,13 @@ class ObjectDetector(object):
             'aglomerative': AgglomerativeClustering
 
         }
-        patched_image = dilation(patched_image)
+        #patched_image = dilation(patched_image)
         patched_image = resize(patched_image,(128,1024*4))
         withe_pixels = np.column_stack(np.where(patched_image > 0))
         print('Pixels detected: ' + str(withe_pixels.shape[0]))
         clusterer = KMeans(n_clusters=1024, precompute_distances=True, n_jobs=2)
         labels = clusterer.fit_predict(withe_pixels)
         return withe_pixels, labels, patched_image, clusterer.cluster_centers_
-        
 
 
 def process_bn_image(file_path,**kwargs):
@@ -185,9 +266,11 @@ def process_bn_image(file_path,**kwargs):
     image_path = kwargs.get('image_path')
     patch_dir = kwargs.get('patch_dir')
     clusters_path = kwargs.get("clusters_path")
+    expand = kwargs.get('expand',False)
+    load_patched = kwargs.get('load_patched')
     object_detector = ObjectDetector(file_path)
     regions_path = file_path[:-3] + 'npy'
-    if regions_path :
+    if regions_path and (matrix_path or image_path or (clusters_path and not load_patched) or patch_dir ):
         try:
             labeled_image = np.load(regions_path)
         except IOError:
@@ -199,14 +282,15 @@ def process_bn_image(file_path,**kwargs):
         np.save(matrix_path,object_detected_matrix)
     
     if image_path:
-        imsave(image_path,object_detector.get_object_detected_image(labeled_image))
+        imsave(image_path,object_detector.get_object_detected_image(labeled_image, expand = expand))
 
     if clusters_path:
-        patched = object_detector.patch(labeled_image)
+        if not load_patched:
+            patched = object_detector.patch(labeled_image, expand = True)
+        else:
+            patched = imread(load_patched)
         if patch_dir:
             imsave(patch_dir,patched)
-        expanded_image = [patched[i*512:(i+1)*512,:] for i in range(4)]
-        patched = np.concatenate(expanded_image, axis = 1)
         coordinates, labels, small_patched, centers  = object_detector.get_super_cluster(patched)
         labels += 1
         l_im = small_patched.copy()
@@ -220,7 +304,7 @@ def process_bn_image(file_path,**kwargs):
         imsave(clusters_path,l_im)
         np.save(clusters_path[:-4],centers)
     elif patch_dir:
-        imsave(patch_dir,object_detector.patch(labeled_image))
+        imsave(patch_dir,object_detector.patch(labeled_image,expand = expand))
 
     
 
@@ -242,6 +326,7 @@ if __name__ == "__main__":
     im_dir = args.imagedir
     p_dir = args.patchdir
     c_dir = args.clusterdir
+    c_up = args.use_patched
     if s_dir and isdir(s_dir):
         if s_dir[-1] != '/':
             s_dir += '/'
@@ -255,6 +340,13 @@ if __name__ == "__main__":
             validate_flag(flags,'image_path',im_dir)
         if c_dir:
             validate_flag(flags,'clusters_path',c_dir)
+        if c_up:
+            validate_flag(flags,'load_patched',c_up)
+
+        if args.expand :
+            flags['expand'] = True
+        else:
+            flags['expand'] = False
 
         for elem in elements:
             print('Processing: ' + elem)
@@ -267,6 +359,8 @@ if __name__ == "__main__":
                 instance_flags['image_path'] += elem[:-4] + '_labeled.png'
             if c_dir:
                 instance_flags['clusters_path'] += elem
+            if c_up:
+                instance_flags['load_patched'] += elem
             process_bn_image(s_dir + elem, **instance_flags)
     else:
         object_detector = ObjectDetector(args.file_path)
@@ -281,11 +375,15 @@ if __name__ == "__main__":
         if args.imagepath:
             imsave(args.imagepath,object_detector.get_object_detected_image(labeled_image))
         if args.patch:
-            imsave(args.patch, object_detector.patch(labeled_image))
+            if args.expand:
+                expand = True
+            else: 
+                expand = False
+            patch = object_detector.patch(labeled_image,expand = expand)
+            patch = img_as_uint(patch)
+            imsave(args.patch, patch )
         if args.cluster:
-            image = object_detector.patch(labeled_image)
-            expanded_image = [image[i*512:(i+1)*512,:] for i in range(4)]
-            image = np.concatenate(expanded_image, axis = 1)
+            image = object_detector.patch(labeled_image, expand = True)
             coordinates, labels, small_patched, centers  = object_detector.get_super_cluster(image)
             labels += 1
             l_im = small_patched.copy()
