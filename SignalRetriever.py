@@ -5,7 +5,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import wfdb
 import os
-from skimage.transform import hough_line, houg_line_peaks
 from scipy.interpolate import interp1d
 from scipy.misc import imsave
 from skimage.viewer import ImageViewer

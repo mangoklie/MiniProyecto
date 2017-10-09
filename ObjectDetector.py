@@ -288,7 +288,8 @@ def process_bn_image(file_path,**kwargs):
         if not load_patched:
             patched = object_detector.patch(labeled_image, expand = True)
         else:
-            patched = imread(load_patched)
+            print('Loading patched image ' + load_patched)
+            patched = imread(load_patched,as_grey=True)
         if patch_dir:
             imsave(patch_dir,patched)
         coordinates, labels, small_patched, centers  = object_detector.get_super_cluster(patched)
