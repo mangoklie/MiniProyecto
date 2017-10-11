@@ -4,132 +4,149 @@ import skimage.exposure as sexp
 import numpy as np
 import matplotlib.pyplot as plt
 import wfdb
-import os
+import functools
+import re
+import argparse
+import sys
+from os.path import isdir, isfile
+from os import listdir
 from scipy.interpolate import interp1d
 from scipy.misc import imsave
 from skimage.viewer import ImageViewer
 
 plt.switch_backend('qt5agg')
 
+parser = argparse.ArgumentParser()
+parser.add_argument('file_path', help = 'The filepath where the file(s) are.')
+parser.add_argument('-od', '--output-dir', help = 'The filepath where the signals are going to be stored.', default = './')
+
 class SignalRetriever():
 
     fun = lambda x, y, z :np.logical_or(x, np.logical_or(y, z))
     view_func = lambda x: ImageViewer(x).show()
+    LEAD_SIZE = 256 #Pixels
+    LEADS = ["I", 'AVR','V1',"V4", 'II', 'AVL', 'V2', 'V5', 'III', 'AVF', 'V3', 'V6','II_LONG']
 
     @staticmethod
-    def get_baseline(image_src):
-        pass
-
-    @staticmethod
-    def transform_to_binary_image(image_src, corrector=35):
-        #La funcion transforma la imagen a blanco y negro haciendo su mejor esfuerzo 
-        #por preservar las líneas de la señal del ECG.
-        
-        # Esta funcion realiza resalta los negros dado un determinado factor para 
-        # visualizar la senial.
-        fun_corrector = lambda x : lambda y: int(x==y)*y*corrector//100 + int(x!=y)*y
-        fun = SignalRetriever.fun
-
-        #Lectura de la imagen y posterior ajuste de Gamma (Para que eliminar difuminadso)
-        image = sexp.adjust_gamma(image_src,1.25)
-        
-        #Datos importantes para la imagen 
-        try:
-            image_aux = np.reshape(image,(image.shape[0]*image.shape[1],image.shape[2]))
-        except IndexError:
-            pass
-
-        #El color que mas aparece
-        color_dominance= np.sum(image_aux,0)
-        color_max = np.max(color_dominance)
-        index_max = np.where(color_dominance==color_max)
-        index_max = index_max[0][0]
-
-        #Threshold para cada canal de la imagen
-        rgb_t = list(map(lambda x: sfil.threshold_isodata(x),[image_aux[:,i] for i in range(3) ]))
-        fun_corrector = fun_corrector(rgb_t[index_max])
-
-        #Aplicando threshold a cada canal y unificando
-        image_aux = fun(image_aux[:,0]>fun_corrector(rgb_t[0]),
-            image_aux[:,1]>fun_corrector(rgb_t[1]),
-            image_aux[:,2]>fun_corrector(rgb_t[2]))
-        
-        #Redimensionando la imagen.
-        bn_im =  np.reshape(image_aux,(image.shape[0],image.shape[1]))
-        return bn_im
-        
-
-    @staticmethod
-    def retrieve_signal(points, image_src):
+    def retrieve_signal(points):
         # Esta funcion toma los pixeles marcados y realiza una interpolacion con los pixeles 
         # obtenido del procesamiento de la imagen
-        y_standarized = (image_src.shape[0]-points[0]).astype(float)
-        inter_func = interp1d(points[1],y_standarized)
-        return inter_func
+        skew = np.min(points[:,1])
+        x_standarized = points[:,1] - skew
+        y_standarized = 64-points[:,0]
+        inter_func = interp1d(x_standarized,y_standarized)
+        return inter_func, x_standarized, y_standarized, skew
 
     @staticmethod
     def plot_digital_ecg(inter_func,points):
         #Funcion de prueba para ver como se ve la señal luego de una interpolación.
-        x = np.linspace(np.min(points[1]),np.max(points[1]),750)
+        x = np.linspace(np.min(points),np.max(points),18000)
         plt.plot(x,inter_func(x))
         plt.axes().set_aspect('equal','box')
         plt.show()
 
     @staticmethod
-    def sample_signal(inter_func,points):
+    def sample_signal(inter_func,xpoints):
         # Guardando archivo de la señal. 
-        x = np.linspace(np.min(points[1]),np.max(points[1]),750)
-        x = inter_func(x)
-        sdx = np.std(x)
-        x-=np.mean(x)
-        x/=sdx
-        x = np.reshape(x,(x.shape[0],1))
+        x = np.linspace(np.min(xpoints),np.max(xpoints),9000*4)
+        xs = inter_func(x)
+        xs -= np.mean(xs)
+        xs /= np.std(xs)*127
+        xs = np.reshape(xs,(xs.shape[0],1))
         # record = wfdb.Record(recordname='Test1',fs=300,nsig=1,siglen=750,p_signals=x,
         # filename=['test.dat'],baseline=[-1],units=['mV'],signame=['ECG'])
         # wfdb.plotrec(record,title='Test')
-        return x
+        return xs
+
+    @staticmethod
+    def split_into_leads(inputs, skew,original_length):
+        segments = []
+        segment_size = int(round(SignalRetriever.LEAD_SIZE*len(inputs)/original_length))
+        segments.append(inputs[0:segment_size-skew])
+        i = segment_size-skew
+        for lead in SignalRetriever.LEADS[1:-1]:
+            segments.append(inputs[i:i+segment_size])
+            i+= segment_size
+        segments.append(inputs[i:])
+        return segments
 
 
     def __init__(self,*args,**kwargs):
-        self.images_src = args
-        self.dir = kwargs.get('dir')
-        exclude = kwargs.get('exclude')
-        # Hay archivos para excluir ?
-        if exclude:
-            #exclude_files = open(exclude,'r')
-            exclude_files = ['img_0.jpg','img_0_II_long.jpg']
-            # json parse
-            self.images_src = list(map(lambda x: self.dir+'/'+x, filter(lambda x: x not in exclude_files or x[-6:] =='bn.jpg',self.images_src)))
+        if args or kwargs.get('file'):
+            if args:
+                coordinates_file = args[0]
+            else:
+                coordinates_file = kwargs.get('file')
+            if isfile(coordinates_file):
+                self.coordinates_file = np.load(coordinates_file)
+                self.file_name = coordinates_file
+            else:
+                raise TypeError('The following path: ' + coordinates_file + ' is not a regular file')
     
-    def get_multisignal_from_images(self):
-        images = sio.imread_collection(self.images_src)
-        i = 0
-        array_signal = []
-        for image in images:
-            points, bn_image = SignalRetriever.transform_to_binary_image(image,corrector=15)
-            #imsave(self.dir+'/'+'img_{0}_bn.jpg'.format(i),bn_image)
-            inter_func = SignalRetriever.retrieve_signal(points,image)
-            x = SignalRetriever.sample_signal(inter_func,points)
-            # record = wfdb.Record(recordname='Test'+str(i),fs=300,nsig=1,siglen=750,p_signals=x,
-            # filename=['test.dat'],baseline=[50],units=['mV'],signame=['ECG'],adcgain=[200],fmt=['16'],checksum=[0],
-            # adcres=[16],adczero=[0],initvalue=[0],blocksize=[0], d_signals=None)
-            #array_signal = np.concatenate((array_signal,SignalRetriever.sample_signal(inter_func,points)))
-            array_signal.append(x)
-            i+=1
-        return array_signal
+    def get_record_signal(self, path):
+        # record = wfdb.Record(recordname='Test'+str(i),fs=300,nsig=1,siglen=750,p_signals=x,
+        # filename=['test.dat'],baseline=[50],units=['mV'],signame=['ECG'],adcgain=[200],fmt=['16'],checksum=[0],
+        # adcres=[16],adczero=[0],initvalue=[0],blocksize=[0], d_signals=None)
+        #array_signal = np.concatenate((array_signal,SignalRetriever.sample_signal(inter_func,points)))   
+        inter_fun, x, y , skew = SignalRetriever.retrieve_signal(self.coordinates_file)
+        sampled_signal = SignalRetriever.sample_signal(inter_fun, x)
+        name = self.file_name.split('/')
+        wfdb.wrsamp(
+            name[-1][:-4],
+            300,
+            ['mV'],
+            ['ALL_LEADS'],
+            sampled_signal,
+            None,
+            ['32'],
+            [1000],
+            [0]
+        )
+        ''' record = wfdb.Record(
+            recordname = name,
+            fs = 300,
+            nsig = 1,
+            siglen = len(sampled_signal),
+            filename = [path+name],
+            units = 'mV',
+            signame = ['ECG ALL LEADS'],
+            adcgain=[1000],
+            baseline = [0],
+            fmt=['16'],
+            checksum=[0],
+            d_signals= sampled_signal
+        ) '''
+        return 
+
 
 if __name__ == '__main__':
-    
-    sr = SignalRetriever(*os.listdir('img0'),exclude=True,dir='img0')
-    array_signal = sr.get_multisignal_from_images()
+    args = parser.parse_args()
     # m_record = wfdb.MultiRecord(recordname='Test', segments=array_signal,nsig=len(array_signal),
     # siglen=9000,
     # fs=300,
     # segname=[str(i) for i in range(len(array_signal))],
     # seglen=[750]*len(array_signal))
+    files = None
+    
+    out_dir = args.output_dir
+    if not (out_dir == './' or isdir(out_dir)):
+        print( out_dir + ' MUST be a directory', file = sys.stderr)
+        exit(1)
 
-    wfdb.wrsamp(recordname='Test',fs=300, units=['mV'],signames=['Lead_X'],
-    p_signals = array_signal[0],fmt=['16'],baseline=[-1],gain=[1000])
+    if args.file_path:
+        if isdir(args.file_path):
+            files = map(lambda x: args.file_path+x ,filter(lambda x: re.match('.*\.npy',x),listdir(args.file_path)))
+        else:
+            s_retriever = SignalRetriever(file = args.file_path)
+            record = s_retriever.get_record_signal(args.output_dir)
+            #record.wrsamp()
+
+    if files:
+        for image_sample in files:
+            print("Processing coordinates: " + image_sample)
+            s_retriever = SignalRetriever(image_sample)
+            record = s_retriever.get_record_signal(args.output_dir)
+            #record.wrsamp()
 
     
 

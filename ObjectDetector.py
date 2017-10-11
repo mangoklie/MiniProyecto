@@ -241,6 +241,8 @@ class ObjectDetector(object):
         return patched_image
     
     def get_super_cluster(self,patched_image = None, clusterer_type = 'kmeans'):
+        patched_image = resize(patched_image,(128,1024*4))
+        return None, None, None, self.aux_get_points(patched_image)
         clustering_type = {
             'kmeans': KMeans,
             'dbscan': dbscan,
@@ -248,12 +250,48 @@ class ObjectDetector(object):
 
         }
         #patched_image = dilation(patched_image)
-        patched_image = resize(patched_image,(128,1024*4))
         withe_pixels = np.column_stack(np.where(patched_image > 0))
         print('Pixels detected: ' + str(withe_pixels.shape[0]))
         clusterer = KMeans(n_clusters=1024, precompute_distances=True, n_jobs=2)
         labels = clusterer.fit_predict(withe_pixels)
         return withe_pixels, labels, patched_image, clusterer.cluster_centers_
+
+    def aux_get_points(self,patched_image):
+        pixels_coords = []
+        previous_coord =(patched_image.shape[0]//2,0)
+        for i in range(patched_image.shape[1]):
+            print('Col: '+ str(i), end = '\r')
+            column = patched_image[:,i]
+            white_spots = column > 0
+            if np.any(white_spots):
+                col_coods = np.column_stack(np.where(white_spots))
+                if len(col_coods) == 1:
+                    pixels_coords.append((col_coods[0,0],i))
+                    previous_coord = (col_coods[0,0],i)
+                elif len(col_coods) > 1:
+                    try:
+                        last_coordinate = pixels_coords[-1]
+                    except IndexError:
+                        last_coordinate = previous_coord
+                    try:
+                        next_col_coords = np.sum(patched_image[:,i+1] > 0)
+                    except IndexError:
+                        continue
+                    if next_col_coords > 1 or next_col_coords == 0:
+                        clusterer = KMeans(n_clusters=2, precompute_distances=True, n_init=2 , n_jobs=2, max_iter=30)
+                        labels = clusterer.fit_predict(col_coods)
+                        #Get the closest center to the previous 
+                        centers = clusterer.cluster_centers_ 
+                        amax = np.argmax(centers[:,0] - previous_coord[0])
+                        pixels_coords.append((centers[amax,0],i))
+                        previous_coord = (centers[amax,0],i)
+                    else:
+                        next_col_coords = np.column_stack(np.where(patched_image[:,i+1] > 0))
+                        middle_point = (next_col_coords + previous_coord)/2
+                        pixels_coords.append((middle_point[0,0],i+.5))
+                        previous_coord = (middle_point[0,0],middle_point[0,1])
+
+        return np.array(pixels_coords)
 
 
 def process_bn_image(file_path,**kwargs):
@@ -293,16 +331,16 @@ def process_bn_image(file_path,**kwargs):
         if patch_dir:
             imsave(patch_dir,patched)
         coordinates, labels, small_patched, centers  = object_detector.get_super_cluster(patched)
-        labels += 1
-        l_im = small_patched.copy()
-        for label in np.unique(labels):
-            cord = coordinates[labels == label, :]
-            l_im[cord[:,0],cord[:,1]] = label  
-        l_im = label2rgb(l_im,small_patched)
-        for center in centers:
-            rr, cc = circle(r = center[0], c = center[1], radius = 2, shape =  small_patched.shape)
-            l_im[rr,cc] = (0,0,1)
-        imsave(clusters_path,l_im)
+        #labels += 1
+        #l_im = small_patched.copy()
+        #for label in np.unique(labels):
+        #    cord = coordinates[labels == label, :]
+        #    l_im[cord[:,0],cord[:,1]] = label  
+        #l_im = label2rgb(l_im,small_patched)
+        #for center in centers:
+        #    rr, cc = circle(r = center[0], c = center[1], radius = 2, shape =  small_patched.shape)
+        #    l_im[rr,cc] = (0,0,1)
+        #imsave(clusters_path,l_im)
         np.save(clusters_path[:-4],centers)
     elif patch_dir:
         imsave(patch_dir,object_detector.patch(labeled_image,expand = expand))
