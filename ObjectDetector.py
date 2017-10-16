@@ -5,7 +5,7 @@ import scipy.interpolate as spi
 import matplotlib.pyplot as plt
 import numpy as np
 import re
-from os.path import isdir
+from os.path import isdir, exists
 from os import listdir
 from sklearn.cluster import AgglomerativeClustering, KMeans, dbscan
 from sklearn.neighbors import kneighbors_graph
@@ -330,17 +330,25 @@ def process_bn_image(file_path,**kwargs):
             patched = imread(load_patched,as_grey=True)
         if patch_dir:
             imsave(patch_dir,patched)
-        coordinates, labels, small_patched, centers  = object_detector.get_super_cluster(patched)
-        #labels += 1
-        #l_im = small_patched.copy()
-        #for label in np.unique(labels):
-        #    cord = coordinates[labels == label, :]
-        #    l_im[cord[:,0],cord[:,1]] = label  
-        #l_im = label2rgb(l_im,small_patched)
-        #for center in centers:
-        #    rr, cc = circle(r = center[0], c = center[1], radius = 2, shape =  small_patched.shape)
-        #    l_im[rr,cc] = (0,0,1)
-        #imsave(clusters_path,l_im)
+        labels = None,
+        coordinates = None
+        small_patched = None
+        centers = None
+        if not exists(clusters_path[:-3]+'npy'): 
+            coordinates, labels, small_patched, centers  = object_detector.get_super_cluster(patched)
+        else: 
+            return
+        if labels and coordinates and small_patched:
+            labels += 1
+            l_im = small_patched.copy()
+            for label in np.unique(labels):
+                cord = coordinates[labels == label, :]
+                l_im[cord[:,0],cord[:,1]] = label  
+            l_im = label2rgb(l_im,small_patched)
+            for center in centers:
+                rr, cc = circle(r = center[0], c = center[1], radius = 2, shape =  small_patched.shape)
+                l_im[rr,cc] = (0,0,1)
+            imsave(clusters_path,l_im)
         np.save(clusters_path[:-4],centers)
     elif patch_dir:
         imsave(patch_dir,object_detector.patch(labeled_image,expand = expand))

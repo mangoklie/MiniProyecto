@@ -4,13 +4,14 @@ import skimage.exposure as sexp
 import numpy as np
 import matplotlib.pyplot as plt
 import wfdb
+import wfdb.processing as wp
 import functools
 import re
 import argparse
 import sys
 from os.path import isdir, isfile
 from os import listdir
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d, CubicSpline
 from scipy.misc import imsave
 from skimage.viewer import ImageViewer
 
@@ -28,13 +29,17 @@ class SignalRetriever():
     LEADS = ["I", 'AVR','V1',"V4", 'II', 'AVL', 'V2', 'V5', 'III', 'AVF', 'V3', 'V6','II_LONG']
 
     @staticmethod
-    def retrieve_signal(points):
+    def retrieve_signal(points, spline = False):
         # Esta funcion toma los pixeles marcados y realiza una interpolacion con los pixeles 
         # obtenido del procesamiento de la imagen
+        if spline:
+            interpolator = CubicSpline
+        else:
+            interpolator = interp1d
         skew = np.min(points[:,1])
         x_standarized = points[:,1] - skew
         y_standarized = 64-points[:,0]
-        inter_func = interp1d(x_standarized,y_standarized)
+        inter_func = interpolator(x_standarized,y_standarized)
         return inter_func, x_standarized, y_standarized, skew
 
     @staticmethod
@@ -48,10 +53,12 @@ class SignalRetriever():
     @staticmethod
     def sample_signal(inter_func,xpoints):
         # Guardando archivo de la señal. 
-        x = np.linspace(np.min(xpoints),np.max(xpoints),9000*4)
+        minp = np.min(xpoints)
+        maxp = np.max(xpoints)
+        x = np.linspace(minp,maxp,12000)
         xs = inter_func(x)
         xs -= np.mean(xs)
-        xs /= np.std(xs)*127
+        xs /= np.std(xs)
         xs = np.reshape(xs,(xs.shape[0],1))
         # record = wfdb.Record(recordname='Test1',fs=300,nsig=1,siglen=750,p_signals=x,
         # filename=['test.dat'],baseline=[-1],units=['mV'],signame=['ECG'])
@@ -90,6 +97,7 @@ class SignalRetriever():
         #array_signal = np.concatenate((array_signal,SignalRetriever.sample_signal(inter_func,points)))   
         inter_fun, x, y , skew = SignalRetriever.retrieve_signal(self.coordinates_file)
         sampled_signal = SignalRetriever.sample_signal(inter_fun, x)
+        sampled_signal = wp.normalize(sampled_signal,-1,1)
         name = self.file_name.split('/')
         wfdb.wrsamp(
             name[-1][:-4],
