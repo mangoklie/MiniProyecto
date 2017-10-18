@@ -1,6 +1,3 @@
-import skimage.io as sio
-import skimage.filters as sfil
-import skimage.exposure as sexp
 import numpy as np
 import matplotlib.pyplot as plt
 import wfdb
@@ -12,8 +9,6 @@ import sys
 from os.path import isdir, isfile
 from os import listdir
 from scipy.interpolate import interp1d, CubicSpline
-from scipy.misc import imsave
-from skimage.viewer import ImageViewer
 
 plt.switch_backend('qt5agg')
 
