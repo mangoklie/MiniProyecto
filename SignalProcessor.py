@@ -40,9 +40,30 @@ class SignalProcessor:
                 wave_list.append(aux_list)
                 aux_list = []
         return wave_list
+    
+    @staticmethod
+    def calc_tp_segment(t_seg, p_seg):
+        return (t_seg[-1][0],p_seg[0][0])
 
+    @staticmethod
+    def calc_pr_segment(p_seg, qrs_complex):
+        return (p_seg[-1][0],qrs_complex[0][0])
 
-                
+    @staticmethod
+    def calc_pr_interval(p_seg, qrs_complex): #Letf beat (?)
+        return (p_seg[0][0], qrs_complex[0][0])
+
+    @staticmethod
+    def calc_left_mid(p_seg, qrs_complex):
+        return (p_seg[0][0],qrs_complex[-1][0])
+
+    @staticmethod
+    def calc_st_segment(qrs_complex, t_seg):
+        return (qrs_complex[-1][0], t_seg[0][0])
+
+    @staticmethod
+    def calc_qt_interval(qrs_complex, t_seg): # mid + right
+        return (qrs_complex[0][0], t_seg[-1][0])         
 
     def __init__(self,*args,**kwargs):
         
@@ -57,7 +78,43 @@ class SignalProcessor:
             if process_summary.returncode:
                 raise ValueError("Expected process to resturn code 0")
             self.annotations = wfdb.rdann(recordname = sigfile, extension = 'annot')
-        self.record = wfdb.rsamp(sigfile)
+        self.record = wfdb.rdsamp(sigfile)
+        self.segments = {
+            'p_wave': [],
+            't_wave': [],
+            'qrs_complex': [],
+            'pr_segment': [],
+            'pr_interval': [],
+            'left_mid': [],
+            'tp_segment': [],
+            'qt_interval': [],
+            'st_segment': []
+
+        }
+
+    def __processSegments(self,prevs,aux_list, prev_n):
+        prev_symbol = prevs[1][1]
+        actual_symbol = aux_list[1][1]
+        if  actual_symbol == 'p':
+            #Calculate TP segment
+            if prev_symbol == 't':
+                self.segments['tp_segment'].append(SignalProcessor.calc_tp_segment(prevs, aux_list))
+            self.segments['p_wave'].append((aux_list[0][0], aux_list[-1][0]))
+
+        elif actual_symbol == 'N':
+            #Calculate PR segment, PR interval, left beat segment, left + mid 
+            if prev_symbol == 'p':
+                self.segments['pr_segment'].append(SignalProcessor.calc_pr_segment(prevs, aux_list))
+                self.segments['pr_interval'].append(SignalProcessor.calc_pr_interval(prevs, aux_list))
+                self.segments['left_mid'].append(SignalProcessor.calc_left_mid(prevs, aux_list))
+            self.segments['qrs_complex'].append((aux_list[0][0], aux_list[-1][0]))
+            
+        elif actual_symbol == 't':
+            #Calculate ST segment QT interval (mid + right)
+            self.segments['t_wave'].append((aux_list[0][0], aux_list[-1][0]))
+            if prev_symbol == 'N':
+                self.segments['qt_interval'].append(SignalProcessor.calc_qt_interval(prevs, aux_list))
+                self.segments['st_segment'].append(SignalProcessor.calc_st_segment(prevs, aux_list))
     
     def detect_segments(self):
         """
@@ -72,37 +129,40 @@ class SignalProcessor:
         aux_list = []
         open_count = 0
         for element in annots:
-
             if element[1] == SignalProcessor.START_WAVE:
                 aux_list.append(element)
                 open_count += 1
                 continue
             elif  element[1] in symbols:
+                if not open_count:
+                    continue
                 aux_list.append(element)
                 continue
             elif element[1] == SignalProcessor.END_WAVE:
+                if open_count -1 < 0 and not open_count:
+                    continue
                 aux_list.append(element)
                 open_count -=1
-                if open_count:
+                if open_count and open_count > 0:
                     continue
-                segs = SignalProcessor.process_wave(aux_list)
-                if len(segs) == 2:
+                segs = SignalProcessor.process_wave(aux_list[:])
+                if len(segs) >1:
                     #Calculate if a method is needed
-                    pass
-                elif segs == aux_list:
-                    #This should be a function.
+                    print('here',segs)
+                    for seg  in segs:
+                        if prevs:
+                            self.__processSegments(prevs,seg,prev_n)
+                            if seg[1][1] == "N":
+                                prev_n = seg
+                        prevs = seg
+                elif segs[0] == aux_list: #ActiveBNK pass 0815 
+                    print('bellow here')
                     if prevs:
-                        prev_symbol = prevs[1][1]
-                        actual_symbol = aux_list[1][1]
-                        if prev_symbol == 't' and actual_symbol == 'p':
-                            #Calculate TP segment
-                            pass
-                        elif prev_symbol == 'p' and actual_symbol == 'N':
-                            #Calculate PR segment, PR interval, left beat segment, left + mid 
-                            pass
-                        elif prev_symbol == 'N' and actual_symbol == 't':
-                            #Calculate ST segment QT interval , left + right
-                            pass
+                        self.__processSegments(prevs,aux_list, prev_n)
                 
+                if aux_list[1][1] == 'N':
+                    prev_n = aux_list
+                prevs = aux_list
+                aux_list = []
             else:
                 raise ValueError('Symbol not recognized: ' + element[1])
