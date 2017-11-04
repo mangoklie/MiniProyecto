@@ -9,6 +9,7 @@ import sys
 from os.path import isdir, isfile
 from os import listdir
 from scipy.interpolate import interp1d, CubicSpline
+from scipy.stats import mode
 
 plt.switch_backend('qt5agg')
 
@@ -33,14 +34,15 @@ class SignalRetriever():
             interpolator = interp1d
         skew = np.min(points[:,1])
         x_standarized = points[:,1] - skew
-        y_standarized = 64-points[:,0]
+        mode_res = mode(points[:,0])
+        y_standarized = mode_res.mode[0]-points[:,0]
         inter_func = interpolator(x_standarized,y_standarized)
         return inter_func, x_standarized, y_standarized, skew
 
     @staticmethod
     def plot_digital_ecg(inter_func,points):
         #Funcion de prueba para ver como se ve la señal luego de una interpolación.
-        x = np.linspace(np.min(points),np.max(points),18000)
+        x = np.linspace(np.min(points),np.max(points),9000)
         plt.plot(x,inter_func(x))
         plt.axes().set_aspect('equal','box')
         plt.show()
@@ -50,10 +52,10 @@ class SignalRetriever():
         # Guardando archivo de la señal. 
         minp = np.min(xpoints)
         maxp = np.max(xpoints)
-        x = np.linspace(minp,maxp,12000)
+        x = np.linspace(minp,maxp,9000)
         xs = inter_func(x)
-        xs -= np.mean(xs)
-        xs /= np.std(xs)
+        #xs -= np.mean(xs)
+        xs /= np.max(np.abs(xs))
         xs = np.reshape(xs,(xs.shape[0],1))
         # record = wfdb.Record(recordname='Test1',fs=300,nsig=1,siglen=750,p_signals=x,
         # filename=['test.dat'],baseline=[-1],units=['mV'],signame=['ECG'])
@@ -92,7 +94,7 @@ class SignalRetriever():
         #array_signal = np.concatenate((array_signal,SignalRetriever.sample_signal(inter_func,points)))   
         inter_fun, x, y , skew = SignalRetriever.retrieve_signal(self.coordinates_file)
         sampled_signal = SignalRetriever.sample_signal(inter_fun, x)
-        sampled_signal = wp.normalize(sampled_signal,-1,1)
+        #sampled_signal = wp.normalize(sampled_signal,-1,1)
         name = self.file_name.split('/')
         wfdb.wrsamp(
             name[-1][:-4],

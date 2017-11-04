@@ -1,11 +1,14 @@
 import subprocess
 import wfdb
+import numpy as np
+import scipy.stats as sps
 from os.path import exists
 
 class SignalProcessor:
 
     START_WAVE = '('
     END_WAVE = ')'
+    CM_PER_SAMPLE =  2.5/300
 
     @staticmethod
     def process_wave(wave_seg):
@@ -91,6 +94,7 @@ class SignalProcessor:
             'st_segment': []
 
         }
+        self.sigfile = sigfile
 
     def __processSegments(self,prevs,aux_list, prev_n):
         prev_symbol = prevs[1][1]
@@ -99,7 +103,7 @@ class SignalProcessor:
             #Calculate TP segment
             if prev_symbol == 't':
                 self.segments['tp_segment'].append(SignalProcessor.calc_tp_segment(prevs, aux_list))
-            self.segments['p_wave'].append((aux_list[0][0], aux_list[-1][0]))
+            self.segments['p_wave'].append((aux_list[0][0], aux_list[1][0] , aux_list[-1][0]))
 
         elif actual_symbol == 'N':
             #Calculate PR segment, PR interval, left beat segment, left + mid 
@@ -107,11 +111,11 @@ class SignalProcessor:
                 self.segments['pr_segment'].append(SignalProcessor.calc_pr_segment(prevs, aux_list))
                 self.segments['pr_interval'].append(SignalProcessor.calc_pr_interval(prevs, aux_list))
                 self.segments['left_mid'].append(SignalProcessor.calc_left_mid(prevs, aux_list))
-            self.segments['qrs_complex'].append((aux_list[0][0], aux_list[-1][0]))
+            self.segments['qrs_complex'].append((aux_list[0][0], aux_list[1][0], aux_list[-1][0]))
             
         elif actual_symbol == 't':
             #Calculate ST segment QT interval (mid + right)
-            self.segments['t_wave'].append((aux_list[0][0], aux_list[-1][0]))
+            self.segments['t_wave'].append((aux_list[0][0], aux_list[1][0], aux_list[-1][0]))
             if prev_symbol == 'N':
                 self.segments['qt_interval'].append(SignalProcessor.calc_qt_interval(prevs, aux_list))
                 self.segments['st_segment'].append(SignalProcessor.calc_st_segment(prevs, aux_list))
@@ -166,3 +170,206 @@ class SignalProcessor:
                 aux_list = []
             else:
                 raise ValueError('Symbol not recognized: ' + element[1])
+
+    def calculate_heart_rate(self):
+        """ Calls the WFDB program hrstats to get the information about the 
+            ECG heart rate. 
+
+            returns: mean heart rate and deviation
+        """
+        completedProcess = subprocess.run('hrstats', '-r', self.sigfile, '-a', 'annot', stdout = subprocess.PIPE)
+        result = completedProcess.stdout
+        result = result.split()
+        bpm = result[1].split('|')
+        bpm = bpm[1].split('/')
+        bpm = bpm[1]
+        return bpm, abs(eval(result[2])) #beats per minute and desviation
+
+    def get_mean_rr_value(self, save_rr_metric = False):
+        """
+            Calls the WFDB program ann2rr to get a list of the RR intervals in samples and then gets the mean
+            returns the mean of the RR intervals in seconds
+        """
+        completedProcess = subprocess.run(['ann2rr','-r',self.sigfile,'-a','annot'], stdout = subprocess.PIPE)
+        rr_segments_length = completedProcess.stdout
+        rr_segments_length = rr_segments_length.split()
+        aux_val = list(map(eval,rr_segments_length))
+        if save_rr_metric:
+            self.segments['rr_interval'] = aux_val
+        mean_rr_ = np.mean(aux_val) / self.record.fs
+
+    def get_interval_wave_durations(self, name):
+        """
+            General function to get the interval or wave durations 
+        """
+        segment = self.segments.get(name)
+        return np.array(list(map(lambda x: x[-1]-x[0], segment))) / self.record.fs
+    
+    def get_pr_intervals(self):
+        """
+            Calculates PR interval values from the pr_interval markers.
+            Returns a list with the intervals in seconds
+        """
+        pr_intervals = self.segments.get('pr_interval')[:]
+        pr_intervals = np.array(list(map(lambda x: x[-1] - x[0], pr_intervals))) / self.record.fs
+        return pr_intervals
+
+    def get_p_wave_durations(self):
+        """
+            Transforms the  p_wave segment marks and returns the p_wave duration in seconds. 
+        """
+        p_waves = self.segments.get('p_wave')[:]
+        return np.array(list(map(lambda x: x[-1]-x[0], p_waves))) / self.record.fs
+
+    def get_qt_interval_durations(self):
+        """
+            Transforms the qt interval segment marks and returns the qt_itnerval duration in seconds
+        """
+        qt_intervals = self.segments.get('qt_interval')[:]
+        return np.array(list(map(lambda x: x[-1]- x[0], qt_intervals))) / self.record.fs
+
+    def get_t_wave_durations(self):
+        t_wave_segments = self.segments.get('t_wave')[:]
+        return np.array(list(map(lambda x: x[-1] - x[0],t_wave_segments))) / self.record.fs
+    
+    #Mean entropy for PR interval durations
+    def get_pr_interval_durations_entropy(self):
+        pr_intervals = self.get_pr_intervals()
+        hist, bin_edges = np.histogram(pr_intervals,'auto')
+        bin_map_pr_interval = np.digitize(pr_intervals,bin_edges[:-1])
+        #probabilities_list = [ hist[i]/len(pr_intervals) for i in range(len(hist))]
+        #bin_map_pr_interval = map(lambda x: probabilities_list[x])
+        bin_map_pr_interval = np.array(list(map(lambda x: hist[x]/len(pr_intervals), bin_map_pr_interval)))
+        return sps.entropy(bin_map_pr_interval)
+    
+    #Mean entropy por P wave durations
+    def get_p_wave_durations_entropy(self):
+        p_wave_durations = self.get_p_wave_durations()
+        hist, bin_edges = np.histogram(pr_intervals, 'auto')
+        bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
+        bin_map_p_waves = np.array(list(map(lambda x: hist[x]/len(p_wave_durations), bin_map_p_waves)))
+        return sps.entropy(bin_map_p_waves)
+
+    #Mean entropy for QT intervals
+    def get_qt_interval_entropy(self):
+        p_wave_durations = self.get_qt_interval_durations()
+        hist, bin_edges = np.histogram(pr_intervals, 'auto')
+        bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
+        bin_map_p_waves = np.array(list(map(lambda x: hist[x]/len(p_wave_durations), bin_map_p_waves)))
+        return sps.entropy(bin_map_p_waves)
+    
+    #Mean entropy of rr interval durations
+    def get_rr_interval_durations_entropy(self):
+        p_wave_durations = self.segments.get('rr_interval')
+        hist, bin_edges = np.histogram(pr_intervals, 'auto')
+        bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
+        bin_map_p_waves = np.array(list(map(lambda x: hist[x]/len(p_wave_durations), bin_map_p_waves)))
+        return sps.entropy(bin_map_p_waves)
+
+    #Mean Entropy of T wave durations
+    def get_t_wave_durations_entropy(self):
+        t_wave_durations = self.get_t_wave_durations()
+        hits, bin_edges = np.histogram(t_wave_durations, 'auto')
+        bin_map_t_waves = np.digitize(t_wave_durations, bin_edges[:-1])
+        bin_map_t_waves = np.array(list(map(lambda x: hist[x]/len(t_wave_durations), bin_map_t_waves)))
+        return sps.entropy(bin_map_t_waves)
+
+    # Area under highest frequency of RR durations (?)
+    # Area under lowest frequency of RR durations (?)
+    # Beats per minute (See calculate_heart_rate)
+    
+    # Is the P wave inverted?
+    # Is the QRS complex inverted?
+    # Is the T wave inverted?
+    def wave_inverted(self, name = 'p_wave'):
+        p_waves = self.segments.get(name)[:]
+        p_waves = list(map(lambda x: self.record.p_signals[x[1]] <= self.record.p_signals[x[0]] and self.record.p_signals[x[1]] <= self.record.p_signals[x[-1]],
+        p_waves))
+        return np.sum(p_waves) / len(p_waves) > .75
+    
+    # Mean duration of PR, QT, RR intervals, P and T waves and QRS complexes
+    def mean_duration_of_interval(self, interval_name):
+        """
+            Returns the mean duration of a given inerval 
+        """
+        interval = self.segments.get(interval_name)[:]
+        interval = list(map(lambda x: x[-1]-x[0], interval))
+        return np.mean(interval) / self.record.fs
+
+    def mean_amplitude_of_wave(self, wave):
+        """
+        Returns the mean amplitude of a given wave in cm.
+        """
+        assert wave in ['p_wave', 't_wave', 'qrs_complex'], "Only QRS complex or P or T waves"
+        aux_rec = self.record.p_signals
+        wave = self.segments.get(wave)
+        apmplitudes = list(map(lambda x: aux_rec[x[1]] - (aux_rec[x[0]] + aux_rec[x[-1]])/2 , wave))
+        return np.mean(apmplitudes)
+
+    def rr_difs(self):
+        """
+        Returns the consecutive differences between the RR intervals in seconds
+        """
+        rrs = np.array(self.segments.get('rr_interval'))
+        delta_rrs = (rrs[1:]-rrs[:-1])/self.record.fs
+        return delta_rrs
+
+    # Proportion of consecutive differences of RR greater than 20ms or than 50ms
+    def rr_difs_prop_greather_than(self, threshhold = 0.02):
+        """
+        Calculates the proportion of consecutive differences of RR intervals greater than a
+        given threshold. 
+        """
+        delta = self.rr_difs()
+        return np.sum(delta > threshold)/len(delta)
+
+    # Root mean square of consecutive differences of RR interval durations
+    def root_mean_square_of_rr_differences(self):
+        delta = self.rr_difs()
+        return np.sqrt(np.mean(delta**2))
+    
+    #Standard deviation or P, T wave duration, QRS complex, PR interval, QT interval, consecutive differences of RR interval durations
+    # RR interval durations, P, R, T peak amplitudes
+    def sd_of_durations(self, name):
+        segments = self.get_interval_wave_durations(name)
+        return numpy.std(segments)
+
+    def sd_of_amplitudes(self,wave):
+        """
+        Returns the standard deviation of the amplitudes of the P, T or QRS waves. 
+        """
+        assert wave in ['p_wave', 't_wave', 'qrs_complex'], "Only QRS complex or P or T waves"
+        aux_rec = self.record.p_signals
+        wave = self.segments.get(wave)
+        apmplitudes = list(map(lambda x: aux_rec[x[1]] - (aux_rec[x[0]] + aux_rec[x[-1]])/2 , wave))
+        return np.std(apmplitudes)
+
+    def sd_of_rr_difs(self): # Maybe delete this one 
+        return np.std(self.rr_difs())
+
+    #Mean amplitude on left, right and mid segments are (I think the mean of al samples.)
+    #Use pywavelets for the wavelet
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
+
+        
+
+
+

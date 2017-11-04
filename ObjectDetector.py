@@ -24,9 +24,7 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('file_path', help = "path to the file or directory to be oppened the saved labels MUST be in this directory")
-parser.add_argument('-m', '--matrix', help = "Path to the matrix output file ")
 parser.add_argument('-i', '--imagepath', help= "Save the object detected image to a path")
-parser.add_argument('-o', "--outdir", help = "Directory where to ouput the processed matrix images")
 parser.add_argument('-imd', '--imagedir', help = "Directory where to put the labeled images" )
 parser.add_argument('-p', '--patch', help = "Patch regions considered to be noise")
 parser.add_argument('-pd', '--patchdir', help = "Location of patched images")
@@ -204,9 +202,6 @@ class ObjectDetector(object):
         
         return retval/np.max(retval)
 
-            
-
-        
 
     def patch(self, l_image, margin = 10,borders_delete = 40, expand = False):
         """
@@ -240,15 +235,11 @@ class ObjectDetector(object):
                 
         return patched_image
     
-    def get_super_cluster(self,patched_image = None, clusterer_type = 'kmeans'):
+    def get_super_cluster(self,patched_image = None, express = False):
         patched_image = resize(patched_image,(128,1024*4))
-        return None, None, None, self.aux_get_points(patched_image)
-        clustering_type = {
-            'kmeans': KMeans,
-            'dbscan': dbscan,
-            'aglomerative': AgglomerativeClustering
-
-        }
+        if not express:
+            return None, None, None, self.aux_get_points(patched_image)
+        
         #patched_image = dilation(patched_image)
         withe_pixels = np.column_stack(np.where(patched_image > 0))
         print('Pixels detected: ' + str(withe_pixels.shape[0]))
@@ -369,7 +360,6 @@ if __name__ == "__main__":
     flags = {}
     args = parser.parse_args()
     s_dir = args.file_path
-    o_dir = args.outdir
     im_dir = args.imagedir
     p_dir = args.patchdir
     c_dir = args.clusterdir
@@ -379,8 +369,6 @@ if __name__ == "__main__":
             s_dir += '/'
         elements = listdir(s_dir)
         elements = filter(lambda x: x[-3:] == 'png', elements)
-        if o_dir:
-            validate_flag(flags,'matrix_path', o_dir)
         if p_dir:
             validate_flag(flags,'patch_dir',p_dir)
         if im_dir: 
@@ -398,8 +386,6 @@ if __name__ == "__main__":
         for elem in elements:
             print('Processing: ' + elem)
             instance_flags = dict(flags)
-            if o_dir:
-                instance_flags['matrix_path'] += elem[:-4]
             if p_dir:
                 instance_flags['patch_dir'] += elem
             if im_dir: 
@@ -410,7 +396,35 @@ if __name__ == "__main__":
                 instance_flags['load_patched'] += elem
             process_bn_image(s_dir + elem, **instance_flags)
     else:
-        object_detector = ObjectDetector(args.file_path)
+        elem = s_dir[2:]
+        if p_dir:
+            validate_flag(flags,'patch_dir',p_dir)
+        if im_dir: 
+            validate_flag(flags,'image_path',im_dir)
+        if c_dir:
+            validate_flag(flags,'clusters_path',c_dir)
+        if c_up:
+            validate_flag(flags,'load_patched',c_up)
+
+        if args.expand :
+            flags['expand'] = True
+        else:
+            flags['expand'] = False
+        
+        print('Processing: ' + elem)
+        instance_flags = dict(flags)
+        if p_dir:
+            instance_flags['patch_dir'] += elem
+        if im_dir: 
+            instance_flags['image_path'] += elem[:-4] + '_labeled.png'
+        if c_dir:
+            instance_flags['clusters_path'] += elem
+        if c_up:
+            instance_flags['load_patched'] += elem
+        print(instance_flags)
+        process_bn_image(s_dir, **instance_flags)
+        
+        ''' object_detector = ObjectDetector(args.file_path)
         try:
             labeled_image = np.load(args.file_path[:-3] + 'npy')
         except IOError:
@@ -441,4 +455,4 @@ if __name__ == "__main__":
             for center in centers:
                 rr, cc = circle(r = center[0], c = center[1], radius = 2, shape =  small_patched.shape)
                 l_im[rr,cc] = (0,0,1)
-            imsave(args.cluster,l_im)
+            imsave(args.cluster,l_im) '''
