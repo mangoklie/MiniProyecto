@@ -2,13 +2,21 @@ import subprocess
 import wfdb
 import numpy as np
 import scipy.stats as sps
+import pywt
 from os.path import exists
+from functools import reduce
+import argparse
 
 class SignalProcessor:
 
     START_WAVE = '('
     END_WAVE = ')'
     CM_PER_SAMPLE =  2.5/300
+    
+    @staticmethod
+    def detail_coefs_of_dwt(segment):
+        _, detil_coefs = pywt.dwt(segment,'db1')
+        return detil_coefs
 
     @staticmethod
     def process_wave(wave_seg):
@@ -202,7 +210,7 @@ class SignalProcessor:
         """
             General function to get the interval or wave durations 
         """
-        segment = self.segments.get(name)
+        segment = self.segments.get(name)[:]
         return np.array(list(map(lambda x: x[-1]-x[0], segment))) / self.record.fs
     
     def get_pr_intervals(self):
@@ -349,6 +357,46 @@ class SignalProcessor:
 
     #Mean amplitude on left, right and mid segments are (I think the mean of al samples.)
     #Use pywavelets for the wavelet
+
+    def get_segment(self,segment):
+        segments = self.segments.get(segment)[:]
+        return map(lambda x: self.record.p_signals[x[0]: x[-1] +1], segments)
+
+    def mean_amplitude_on_segments(self,segment):
+        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
+        return np.mean(segment)
+
+    def variance_amplitude_segments(self,segment):
+        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
+        return np.var(segments)
+
+    def skewnes_segment(self, segment):
+        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
+        return sps.skew(segments)
+
+    def kurtosis_of_segment(self, segment):
+        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
+        return sps.kurtosis(self.get_segment(segment))
+
+    def wavelet_detail_coefs(self, segment):
+        segments = map(SignalProcessor.detail_coefs_of_dwt,self.get_segment(segment))
+        return segments
+
+    def mean_wavelet_detail_coefs(self,segment):
+        segments = reduce(lambda x,y: np.concatenate((x,y)), self.wavelet_detail_coefs(segment))
+        return np.mean(segments)
+
+    def mean_kurtosis_wavelet_detail_coefs(self,segment):
+        segments = map(sps.kurtosis, self.wavelet_detail_coefs(segment))
+        return np.mean(list(segments))
+
+    def mean_skew_wavelet_detail_coefs(self,segment):
+        segments = map(sps.skew, self.wavelet_detail_coefs(segment))
+        return np.mean(list(segments))
+
+    def mean_std_wavelet_detal_coefs(self,segment):
+        segments = map(np.std, self.wavelet_detail_coefs(segment))
+        return np.mean(list(segments))
 
 
 
