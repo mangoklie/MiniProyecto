@@ -3,9 +3,18 @@ import wfdb
 import numpy as np
 import scipy.stats as sps
 import pywt
-from os.path import exists
-from functools import reduce
 import argparse
+import re
+from os.path import exists, isdir
+from os import listdir
+from sys import stdout, stderr
+from functools import reduce
+import json
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument('-f','--file_path', help = "path to the file or directory to be oppened the saved labels MUST be in this directory", default = './')
+parser.add_argument('-o','--output_file', help = "Output file", default = None)
 
 class SignalProcessor:
 
@@ -19,6 +28,17 @@ class SignalProcessor:
         return detil_coefs
 
     @staticmethod
+    def analyze_wave_seg(wave_seg):
+        opening =0
+        closing = 0
+        symbol = 0
+        for item in wave_seg:
+            if item[1] == SignalProcessor.START_WAVE: opening += 1
+            elif item[1] == SignalProcessor.END_WAVE: closing += 1
+            elif item[1] in ['p','N','t']: symbol+=1
+        return opening, symbol, closing
+
+    @staticmethod
     def process_wave(wave_seg):
         """
         Separates mixed annotations like '((pN))'. 
@@ -28,6 +48,9 @@ class SignalProcessor:
         symbols = ['p', "N", 't']
         wave_list = []
         aux_list = []
+        opening, symbolx, closing = SignalProcessor.analyze_wave_seg(wave_seg)
+        if opening == closing and closing == 2 and symbolx == 1:
+            return [wave_seg[1:-1]]
         while wave_seg:
             elem = wave_seg.pop(0)
             if elem[1] == SignalProcessor.START_WAVE:
@@ -140,38 +163,40 @@ class SignalProcessor:
         prevs = []
         aux_list = []
         open_count = 0
+        prev_simb = None
         for element in annots:
             if element[1] == SignalProcessor.START_WAVE:
                 aux_list.append(element)
                 open_count += 1
+                prev_simb = element[1]
                 continue
             elif  element[1] in symbols:
                 if not open_count:
                     continue
                 aux_list.append(element)
+                prev_simb = element[1]
                 continue
             elif element[1] == SignalProcessor.END_WAVE:
-                if open_count -1 < 0 and not open_count:
-                    continue
+                if (open_count -1 < 0 and not open_count) or prev_simb == SignalProcessor.START_WAVE :
+                    continue 
                 aux_list.append(element)
                 open_count -=1
                 if open_count and open_count > 0:
                     continue
+                #sep = ''
+                #print("Aux list: ",sep.join(list(map(lambda x: x[1],aux_list))))
                 segs = SignalProcessor.process_wave(aux_list[:])
                 if len(segs) >1:
                     #Calculate if a method is needed
-                    print('here',segs)
-                    for seg  in segs:
+                    for seg  in filter(lambda x: len(x) == 3,segs):
                         if prevs:
                             self.__processSegments(prevs,seg,prev_n)
                             if seg[1][1] == "N":
                                 prev_n = seg
                         prevs = seg
                 elif segs[0] == aux_list: #ActiveBNK pass 0815 
-                    print('bellow here')
                     if prevs:
                         self.__processSegments(prevs,aux_list, prev_n)
-                
                 if aux_list[1][1] == 'N':
                     prev_n = aux_list
                 prevs = aux_list
@@ -185,15 +210,22 @@ class SignalProcessor:
 
             returns: mean heart rate and deviation
         """
-        completedProcess = subprocess.run('hrstats', '-r', self.sigfile, '-a', 'annot', stdout = subprocess.PIPE)
+        completedProcess = subprocess.run(['hrstats', '-r', self.sigfile, '-a', 'annot'], stdout = subprocess.PIPE)
         result = completedProcess.stdout
-        result = result.split()
+        result = list(map(lambda x: x.decode('utf-8'),result.split()))
+        nan = 0
+        if not result:
+            return 0,0
+        print
         bpm = result[1].split('|')
-        bpm = bpm[1].split('/')
-        bpm = bpm[1]
+        bpm_ = bpm[1].split('/')
+        bpm = bpm_[1]
+        bpm = int(bpm)
+        if bpm < 0:
+            bpm = int(bpm_[0])
         return bpm, abs(eval(result[2])) #beats per minute and desviation
 
-    def get_mean_rr_value(self, save_rr_metric = False):
+    def get_mean_rr_value(self, save_rr_metric = True):
         """
             Calls the WFDB program ann2rr to get a list of the RR intervals in samples and then gets the mean
             returns the mean of the RR intervals in seconds
@@ -205,6 +237,7 @@ class SignalProcessor:
         if save_rr_metric:
             self.segments['rr_interval'] = aux_val
         mean_rr_ = np.mean(aux_val) / self.record.fs
+        return mean_rr_
 
     def get_interval_wave_durations(self, name):
         """
@@ -245,41 +278,39 @@ class SignalProcessor:
         pr_intervals = self.get_pr_intervals()
         hist, bin_edges = np.histogram(pr_intervals,'auto')
         bin_map_pr_interval = np.digitize(pr_intervals,bin_edges[:-1])
-        #probabilities_list = [ hist[i]/len(pr_intervals) for i in range(len(hist))]
-        #bin_map_pr_interval = map(lambda x: probabilities_list[x])
-        bin_map_pr_interval = np.array(list(map(lambda x: hist[x]/len(pr_intervals), bin_map_pr_interval)))
+        bin_map_pr_interval = np.array(list(map(lambda x: hist[x-1]/len(pr_intervals), bin_map_pr_interval)))
         return sps.entropy(bin_map_pr_interval)
     
     #Mean entropy por P wave durations
     def get_p_wave_durations_entropy(self):
         p_wave_durations = self.get_p_wave_durations()
-        hist, bin_edges = np.histogram(pr_intervals, 'auto')
+        hist, bin_edges = np.histogram(p_wave_durations, 'auto')
         bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
-        bin_map_p_waves = np.array(list(map(lambda x: hist[x]/len(p_wave_durations), bin_map_p_waves)))
+        bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves)))
         return sps.entropy(bin_map_p_waves)
 
     #Mean entropy for QT intervals
     def get_qt_interval_entropy(self):
         p_wave_durations = self.get_qt_interval_durations()
-        hist, bin_edges = np.histogram(pr_intervals, 'auto')
+        hist, bin_edges = np.histogram(p_wave_durations, 'auto')
         bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
-        bin_map_p_waves = np.array(list(map(lambda x: hist[x]/len(p_wave_durations), bin_map_p_waves)))
+        bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves)))
         return sps.entropy(bin_map_p_waves)
     
     #Mean entropy of rr interval durations
     def get_rr_interval_durations_entropy(self):
         p_wave_durations = self.segments.get('rr_interval')
-        hist, bin_edges = np.histogram(pr_intervals, 'auto')
+        hist, bin_edges = np.histogram(p_wave_durations, 'auto')
         bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
-        bin_map_p_waves = np.array(list(map(lambda x: hist[x]/len(p_wave_durations), bin_map_p_waves)))
+        bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves)))
         return sps.entropy(bin_map_p_waves)
 
     #Mean Entropy of T wave durations
     def get_t_wave_durations_entropy(self):
         t_wave_durations = self.get_t_wave_durations()
-        hits, bin_edges = np.histogram(t_wave_durations, 'auto')
+        hist, bin_edges = np.histogram(t_wave_durations, 'auto')
         bin_map_t_waves = np.digitize(t_wave_durations, bin_edges[:-1])
-        bin_map_t_waves = np.array(list(map(lambda x: hist[x]/len(t_wave_durations), bin_map_t_waves)))
+        bin_map_t_waves = np.array(list(map(lambda x: hist[x-1]/len(t_wave_durations), bin_map_t_waves)))
         return sps.entropy(bin_map_t_waves)
 
     # Area under highest frequency of RR durations (?)
@@ -310,8 +341,8 @@ class SignalProcessor:
         """
         assert wave in ['p_wave', 't_wave', 'qrs_complex'], "Only QRS complex or P or T waves"
         aux_rec = self.record.p_signals
-        wave = self.segments.get(wave)
-        apmplitudes = list(map(lambda x: aux_rec[x[1]] - (aux_rec[x[0]] + aux_rec[x[-1]])/2 , wave))
+        wave_s = self.segments.get(wave)
+        apmplitudes = list(map(lambda x: aux_rec[x[1]] - (aux_rec[x[0]] + aux_rec[x[-1]])/2 , wave_s))
         return np.mean(apmplitudes)
 
     def rr_difs(self):
@@ -323,7 +354,7 @@ class SignalProcessor:
         return delta_rrs
 
     # Proportion of consecutive differences of RR greater than 20ms or than 50ms
-    def rr_difs_prop_greather_than(self, threshhold = 0.02):
+    def rr_difs_prop_greather_than(self, threshold = 0.02):
         """
         Calculates the proportion of consecutive differences of RR intervals greater than a
         given threshold. 
@@ -339,8 +370,11 @@ class SignalProcessor:
     #Standard deviation or P, T wave duration, QRS complex, PR interval, QT interval, consecutive differences of RR interval durations
     # RR interval durations, P, R, T peak amplitudes
     def sd_of_durations(self, name):
-        segments = self.get_interval_wave_durations(name)
-        return numpy.std(segments)
+        if name == 'rr_interval':
+            segments = self.segments.get(name)
+        else:
+            segments = self.get_interval_wave_durations(name)
+        return np.std(segments)
 
     def sd_of_amplitudes(self,wave):
         """
@@ -364,7 +398,7 @@ class SignalProcessor:
 
     def mean_amplitude_on_segments(self,segment):
         segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
-        return np.mean(segment)
+        return np.mean(segments)
 
     def variance_amplitude_segments(self,segment):
         segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
@@ -372,11 +406,11 @@ class SignalProcessor:
 
     def skewnes_segment(self, segment):
         segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
-        return sps.skew(segments)
+        return sps.skew(segments)[0]
 
     def kurtosis_of_segment(self, segment):
         segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
-        return sps.kurtosis(self.get_segment(segment))
+        return sps.kurtosis(segments)[0]
 
     def wavelet_detail_coefs(self, segment):
         segments = map(SignalProcessor.detail_coefs_of_dwt,self.get_segment(segment))
@@ -399,25 +433,152 @@ class SignalProcessor:
         return np.mean(list(segments))
 
 
+def get_features(sig_processor_object,name):
+    feature_list = [name]
+    mean_rr_val = sig_processor_object.get_mean_rr_value()
+    aux, _ = sig_processor_object.calculate_heart_rate()
+    feature_list.append(sig_processor_object.get_pr_interval_durations_entropy())
+    feature_list.append(sig_processor_object.get_p_wave_durations_entropy())
+    feature_list.append(sig_processor_object.get_qt_interval_entropy())
+    feature_list.append(sig_processor_object.get_t_wave_durations_entropy())
+    feature_list.append(aux)
+    feature_list.append(sig_processor_object.mean_duration_of_interval('pr_interval'))
+    feature_list.append(sig_processor_object.mean_duration_of_interval('p_wave'))
+    feature_list.append(sig_processor_object.mean_duration_of_interval('qt_interval'))
+    feature_list.append(mean_rr_val)
+    feature_list.append(sig_processor_object.mean_duration_of_interval('t_wave'))
+    feature_list.append(sig_processor_object.mean_duration_of_interval('qrs_complex'))
+    feature_list.append(sig_processor_object.mean_amplitude_of_wave('p_wave'))
+    feature_list.append(sig_processor_object.mean_amplitude_of_wave('qrs_complex'))
+    feature_list.append(sig_processor_object.mean_amplitude_of_wave('t_wave'))
+    feature_list.append(sig_processor_object.rr_difs_prop_greather_than())
+    feature_list.append(sig_processor_object.rr_difs_prop_greather_than(0.05))
+    feature_list.append(sig_processor_object.root_mean_square_of_rr_differences())
+    feature_list.append(sig_processor_object.sd_of_durations('pr_interval'))
+    feature_list.append(sig_processor_object.sd_of_durations('p_wave'))
+    feature_list.append(sig_processor_object.sd_of_durations('qt_interval'))
+    feature_list.append(sig_processor_object.sd_of_rr_difs())
+    feature_list.append(sig_processor_object.sd_of_durations('rr_interval'))
+    feature_list.append(sig_processor_object.sd_of_durations('t_wave'))
+    feature_list.append(sig_processor_object.sd_of_amplitudes('p_wave'))
+    feature_list.append(sig_processor_object.sd_of_amplitudes('qrs_complex'))
+    feature_list.append(sig_processor_object.sd_of_amplitudes('t_wave'))
+    feature_list.append(sig_processor_object.sd_of_durations('qrs_complex'))
+    feature_list.append(sig_processor_object.mean_amplitude_on_segments('pr_segment'))
+    feature_list.append(sig_processor_object.mean_amplitude_on_segments('st_segment'))
+    feature_list.append(sig_processor_object.mean_amplitude_on_segments('tp_segment'))
+    feature_list.append(sig_processor_object.variance_amplitude_segments('pr_segment'))
+    feature_list.append(sig_processor_object.variance_amplitude_segments('st_segment'))
+    feature_list.append(sig_processor_object.variance_amplitude_segments('tp_segment'))
+    feature_list.append(sig_processor_object.skewnes_segment('pr_segment'))
+    feature_list.append(sig_processor_object.skewnes_segment('st_segment'))
+    feature_list.append(sig_processor_object.skewnes_segment('tp_segment'))
+    feature_list.append(sig_processor_object.kurtosis_of_segment('pr_segment'))
+    feature_list.append(sig_processor_object.kurtosis_of_segment('st_segment'))
+    feature_list.append(sig_processor_object.kurtosis_of_segment('tp_segment'))
+    feature_list.append(sig_processor_object.mean_wavelet_detail_coefs('pr_segment'))
+    feature_list.append(sig_processor_object.mean_wavelet_detail_coefs('st_segment'))
+    feature_list.append(sig_processor_object.mean_wavelet_detail_coefs('tp_segment'))
+    feature_list.append(sig_processor_object.mean_kurtosis_wavelet_detail_coefs('pr_segment'))
+    feature_list.append(sig_processor_object.mean_kurtosis_wavelet_detail_coefs('st_segment'))
+    feature_list.append(sig_processor_object.mean_kurtosis_wavelet_detail_coefs('tp_segment'))
+    feature_list.append(sig_processor_object.mean_skew_wavelet_detail_coefs('pr_segment'))
+    feature_list.append(sig_processor_object.mean_skew_wavelet_detail_coefs('st_segment'))
+    feature_list.append(sig_processor_object.mean_skew_wavelet_detail_coefs('tp_segment'))
+    feature_list.append(sig_processor_object.mean_std_wavelet_detal_coefs('pr_segment'))
+    feature_list.append(sig_processor_object.mean_std_wavelet_detal_coefs('st_segment'))
+    feature_list.append(sig_processor_object.mean_std_wavelet_detal_coefs('tp_segment'))
+    return feature_list
 
 
+if __name__ == "__main__":
+    args = parser.parse_args()
+    dir_file = args.file_path
+    list_files = []
+    field_names = [
+        "file name"
+        "PR interval duration entropy",
+        "P wave duration entropy",
+        "QT interval duration entropy",
+        "T wave duration entropy",
+        "Heart rate",
+        "Mean duration or PR interval",
+        "Mean duration of P wave",
+        "Mean duration of QT interval",
+        "Mean duration of RR interval",
+        "Mean duration of T wave",
+        "Mean duration of QRS complex",
+        "Mean amplitude of P wave",
+        "Mean apmlitude of QRS complex",
+        "Mean amplitude of T wave",
+        "RR differences greater than 20 ms",
+        "RR differences greater than 50 ms",
+        "Root mean square of RR differences",
+        "Standard deviation for PR interval duration",
+        "Standard deviation for P wave duration",
+        "Standard deviation for QT interval duration",
+        "Standard deviation for RR differences",
+        "Standard deviation for RR interval duration",
+        "Standard deviation for T wave",
+        "Standard deviation for P wave amplitude",
+        "Standard deviation for QRS complex apmplitude",
+        "Standard Deviation for T wave amplitude",
+        "Standard Deviation for QRS complex duration",
+        "Mean aplitude of left segment",
+        "Mean amplitude of mid segment",
+        "Mean amplitude of right segment",
+        "Variance of amplitude of left segment",
+        "Variance of amplitude of mid segment",
+        "Variance of amplitude of right segment",
+        "Skew of amplitude of left segment",
+        "Skew of aplitude mid segment",
+        "Skew of amplitude right segment",
+        "Kurtosis of amplitude on left segment ",
+        "Kurtosis of amplitude on mid segment",
+        "Kurtosis of amplitude on right segment",
+        "Mean wavelet detail coeficient on left segment",
+        "Mean wavelet detail coeficient on mid segment",
+        "Mean wavelet detail coeficient on right segment",
+        "Mean kurtosis on wavelet detail coeficient on left seg.",
+        "Mean kurtosis on wavelet detail coeficient on mid seg.",
+        "Mean kurtosis on wavelet detail coeficient on right seg.",
+        "Mean skew on wavelet detail coeficient on left segment",
+        "Mean skew on wavelet detail coeficient on mid segment",
+        "Mean skew on wavelet detail coeficient on right segment",
+        "Mean std of wavelet detail coefficients from left seg",
+        "Mean std of wavelet detail coefficients from mid seg",
+        "Mean std of wavelet detail coefficients from right seg",
 
+    ]
+    SEPARATOR = ','
+    print_file = stdout
+    if args.output_file:
+        print_file = open(args.output_file + '.csv','w')
+    print(SEPARATOR.join(field_names),file = print_file)
+    if dir_file == './':
+        list_files = listdir()
+        list_files = map(lambda x: x[:-4],filter(lambda x: re.match('.*\.hea',x), list_files))
+        list_files = list(np.unique(list(list_files)))
+        for item in list_files:
+            print('Processing file: ' + item)
+            try:
+                spobj = SignalProcessor(item)
+                spobj.detect_segments()
+                features = get_features(spobj,item)
+                features = list(map(str,features))
+                print(SEPARATOR.join(features), file = print_file)
+            except TypeError:
+                pass
 
+    else:
+        item = dir_file
+        print('Processing file: ' + item)
+        spobj = SignalProcessor(item)
+        spobj.detect_segments()
+        features = get_features(spobj,item)
+        features = list(map(str,features))
+        print(SEPARATOR.join(features), file = print_file)
 
-
-
-
-
-
-
-
-
-
-
-
-        
-
-        
-
-
-
+    
+    if args.output_file:
+        print_file.close()
