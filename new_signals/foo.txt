@@ -1,0 +1,15 @@
+Traceback (most recent call last):
+  File "../SignalProcessor.py", line 501, in <module>
+    spobj.detect_segments()
+  File "../SignalProcessor.py", line 182, in detect_segments
+    segs = SignalProcessor.process_wave(aux_list[:])
+  File "../SignalProcessor.py", line 60, in process_wave
+    if x[1] != SignalProcessor.START_WAVE and x[1] in symbols and not symbol_found:
+TypeError: argument of type 'int' is not iterable
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "../SignalProcessor.py", line 506, in <module>
+    print(e.message, file = stderr)
+AttributeError: 'TypeError' object has no attribute 'message'
