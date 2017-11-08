@@ -418,19 +418,26 @@ class SignalProcessor:
 
     def mean_wavelet_detail_coefs(self,segment):
         segments = reduce(lambda x,y: np.concatenate((x,y)), self.wavelet_detail_coefs(segment))
+        segments = np.array(list(segments))
         return np.mean(segments)
 
     def mean_kurtosis_wavelet_detail_coefs(self,segment):
-        segments = map(sps.kurtosis, self.wavelet_detail_coefs(segment))
-        return np.mean(list(segments))
+        segments = map(lambda x: sps.kurtosis(x), self.wavelet_detail_coefs(segment))
+        segments = filter(lambda x:  not np.isnan(x).any(), segments)
+        segments = list(segments)
+        return np.mean(segments)
 
     def mean_skew_wavelet_detail_coefs(self,segment):
-        segments = map(sps.skew, self.wavelet_detail_coefs(segment))
-        return np.mean(list(segments))
+        segments = map(lambda x: sps.skew(x), self.wavelet_detail_coefs(segment))
+        segments = filter(lambda x:  not np.isnan(x).any(), segments)
+        segments = list(segments)
+        return np.mean(segments)
 
     def mean_std_wavelet_detal_coefs(self,segment):
         segments = map(np.std, self.wavelet_detail_coefs(segment))
-        return np.mean(list(segments))
+        segments = filter(lambda x:  not np.isnan(x).any(), segments)
+        segments = list(segments)
+        return np.mean(segments)
 
 
 def get_features(sig_processor_object,name):
@@ -496,7 +503,7 @@ if __name__ == "__main__":
     dir_file = args.file_path
     list_files = []
     field_names = [
-        "file name"
+        "file name",
         "PR interval duration entropy",
         "P wave duration entropy",
         "QT interval duration entropy",
@@ -567,7 +574,7 @@ if __name__ == "__main__":
                 features = get_features(spobj,item)
                 features = list(map(str,features))
                 print(SEPARATOR.join(features), file = print_file)
-            except TypeError:
+            except Exception:
                 pass
 
     else:
