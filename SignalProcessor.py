@@ -5,12 +5,13 @@ import scipy.stats as sps
 import pywt
 import argparse
 import re
+from pyentrp import entropy as entr
 from os.path import exists, isdir
 from os import listdir
 from sys import stdout, stderr
 from functools import reduce
 import json
-
+import sys
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-f','--file_path', help = "path to the file or directory to be oppened the saved labels MUST be in this directory", default = './')
@@ -21,11 +22,55 @@ class SignalProcessor:
     START_WAVE = '('
     END_WAVE = ')'
     CM_PER_SAMPLE =  2.5/300
+    INITIALIZER = np.array([[0]])
+    
+    @staticmethod
+    def SampEn(U, m = 2, r = .2):
+
+        def _maxdist(x_i, x_j):
+            return max([abs(ua - va) for ua, va in zip(x_i, x_j)])
+
+        def _phi(m):
+            x = [[U[j] for j in range(i, i + m - 1 + 1)] for i in range(N - m + 1)]
+            C = [(len([1 for x_j in x if _maxdist(x_i, x_j) <= r])) - 1 for x_i in x]
+            return sum(C)
+
+        N = len(U)
+        if N < 2:
+            return np.nan
+        return np.log(_phi(m)/_phi(m+1))
+
+    @staticmethod
+    def entropy(segments):
+        try:
+            hist, bin_edges = np.histogram(segments,'auto')
+            bin_map_pr_interval = np.digitize(segments,bin_edges[:-1])
+            bin_map_pr_interval = np.array(list(map(lambda x: hist[x-1]/len(segments), bin_map_pr_interval)))
+            return sps.entropy(bin_map_pr_interval, base = 2)
+        except Exception as e:
+            print(str(e), file = sys.stderr)
+            return 0.0
+
     
     @staticmethod
     def detail_coefs_of_dwt(segment):
-        _, detil_coefs = pywt.dwt(segment,'db1')
-        return detil_coefs
+        try:
+            _, detil_coefs = pywt.dwt(segment,'haar')
+            return detil_coefs
+        except ValueError:
+            return np.array([])
+    
+    @staticmethod
+    def detail_coefs_of_dwt_levels(segment, levels = 5):
+        if levels == 0:
+            return [np.array([])]
+        try:
+            coefs = pywt.wavedec(segment,'haar', level = levels)
+        except ValueError:
+            coefs = SignalProcessor.detail_coefs_of_dwt_levels(segment,levels-1)
+            coefs.insert(1,np.array([]))
+            coefs[0] = np.array([])
+        return coefs
 
     @staticmethod
     def analyze_wave_seg(wave_seg):
@@ -204,6 +249,80 @@ class SignalProcessor:
             else:
                 raise ValueError('Symbol not recognized: ' + element[1])
 
+    
+    def aux_detect_segments_new(self, queue_ext):
+        symbols = ['p', "N", 't']
+        aux_list = []
+        queue = []
+        expecting = None
+        end_wave_reached = False
+        for element in queue_ext:
+            if element[1] == SignalProcessor.START_WAVE and not expecting:
+                aux_list.append(element)
+                expecting = element[2]
+            elif element[1] in symbols and expecting == element[2]: 
+                aux_list.append(element)
+            elif element[1] == SignalProcessor.END_WAVE and expecting == element[2]:
+                aux_list.append(element)
+                end_wave_reached = True
+            else:
+                queue.append(element)
+            if end_wave_reached:
+                if len(aux_list) > 2:
+                    return aux_list, queue
+        return [],queue
+
+
+    
+    def detect_segments_new(self):
+        symbols = ['p', "N", 't']
+        annots = zip(self.annotations.sample,self.annotations.symbol,self.annotations.num)
+        prev_n = []
+        prevs = []
+        aux_list = []
+        queue = []
+        expecting = None
+        symbols_expecting = None
+        end_wave_reached = False
+        for element in annots:
+            if element[1] == SignalProcessor.START_WAVE and not expecting:
+                aux_list.append(element)
+                expecting = element[2]
+                symbols_expecting = symbols[expecting]
+            elif element[1] in symbols and symbols_expecting == element[1]: 
+                aux_list.append(element)
+            elif element[1] == SignalProcessor.END_WAVE and expecting == element[2]:
+                aux_list.append(element)
+                end_wave_reached = True
+            else:
+                queue.append(element)
+            
+            if end_wave_reached:
+                end_wave_reached = False
+                if len(aux_list) < 3:
+                    aux_list =[]
+                    expecting = None
+                    prevs = []
+                    continue
+                if prevs:
+                    self.__processSegments(prevs,aux_list,prev_n)
+                prevs = aux_list
+                aux_list = []
+                expecting = None
+                symbols_expecting = None
+                while queue:
+                    aux_list, queue = self.aux_detect_segments_new(queue)
+                    if  not aux_list:
+                        break
+                    elif len(aux_list) >2:
+                        self.__processSegments(prevs,aux_list,prev_n)
+                        prevs = aux_list
+                        aux_list = []
+                    else: 
+                        continue
+            
+
+
     def calculate_heart_rate(self):
         """ Calls the WFDB program hrstats to get the information about the 
             ECG heart rate. 
@@ -279,7 +398,7 @@ class SignalProcessor:
         hist, bin_edges = np.histogram(pr_intervals,'auto')
         bin_map_pr_interval = np.digitize(pr_intervals,bin_edges[:-1])
         bin_map_pr_interval = np.array(list(map(lambda x: hist[x-1]/len(pr_intervals), bin_map_pr_interval)))
-        return sps.entropy(bin_map_pr_interval)
+        return sps.entropy(bin_map_pr_interval, base = 2)
     
     #Mean entropy por P wave durations
     def get_p_wave_durations_entropy(self):
@@ -287,7 +406,7 @@ class SignalProcessor:
         hist, bin_edges = np.histogram(p_wave_durations, 'auto')
         bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
         bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves)))
-        return sps.entropy(bin_map_p_waves)
+        return sps.entropy(bin_map_p_waves, base = 2)
 
     #Mean entropy for QT intervals
     def get_qt_interval_entropy(self):
@@ -295,7 +414,7 @@ class SignalProcessor:
         hist, bin_edges = np.histogram(p_wave_durations, 'auto')
         bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
         bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves)))
-        return sps.entropy(bin_map_p_waves)
+        return sps.entropy(bin_map_p_waves, base = 2)
     
     #Mean entropy of rr interval durations
     def get_rr_interval_durations_entropy(self):
@@ -303,7 +422,7 @@ class SignalProcessor:
         hist, bin_edges = np.histogram(p_wave_durations, 'auto')
         bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
         bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves)))
-        return sps.entropy(bin_map_p_waves)
+        return sps.entropy(bin_map_p_waves, base = 2)
 
     #Mean Entropy of T wave durations
     def get_t_wave_durations_entropy(self):
@@ -311,7 +430,7 @@ class SignalProcessor:
         hist, bin_edges = np.histogram(t_wave_durations, 'auto')
         bin_map_t_waves = np.digitize(t_wave_durations, bin_edges[:-1])
         bin_map_t_waves = np.array(list(map(lambda x: hist[x-1]/len(t_wave_durations), bin_map_t_waves)))
-        return sps.entropy(bin_map_t_waves)
+        return sps.entropy(bin_map_t_waves, base = 2)
 
     # Area under highest frequency of RR durations (?)
     # Area under lowest frequency of RR durations (?)
@@ -333,7 +452,10 @@ class SignalProcessor:
         """
         interval = self.segments.get(interval_name)[:]
         interval = list(map(lambda x: x[-1]-x[0], interval))
-        return np.mean(interval) / self.record.fs
+        mean_val = np.mean(interval) / self.record.fs
+        if np.isnan(mean_val):
+            mean_val = 0
+        return mean_val
 
     def mean_amplitude_of_wave(self, wave):
         """
@@ -342,8 +464,13 @@ class SignalProcessor:
         assert wave in ['p_wave', 't_wave', 'qrs_complex'], "Only QRS complex or P or T waves"
         aux_rec = self.record.p_signals
         wave_s = self.segments.get(wave)
-        apmplitudes = list(map(lambda x: aux_rec[x[1]] - (aux_rec[x[0]] + aux_rec[x[-1]])/2 , wave_s))
-        return np.mean(apmplitudes)
+        apmplitudes = list(map(lambda x: aux_rec[x[1]], wave_s))
+        mean_val = np.nanmean(apmplitudes)
+        return mean_val
+
+    def zero_crossing_rate(self):
+        rec = self.record.p_signals
+        return np.sum(rec[:-1]*rec[1:] < 0)/(len(rec)-1)
 
     def rr_difs(self):
         """
@@ -360,12 +487,14 @@ class SignalProcessor:
         given threshold. 
         """
         delta = self.rr_difs()
-        return np.sum(delta > threshold)/len(delta)
+        result_delta = np.sum(delta > threshold)/len(delta)
+        return result_delta
 
     # Root mean square of consecutive differences of RR interval durations
     def root_mean_square_of_rr_differences(self):
         delta = self.rr_difs()
-        return np.sqrt(np.mean(delta**2))
+        res = np.sqrt(np.nanmean(delta**2))
+        return res
     
     #Standard deviation or P, T wave duration, QRS complex, PR interval, QT interval, consecutive differences of RR interval durations
     # RR interval durations, P, R, T peak amplitudes
@@ -374,7 +503,8 @@ class SignalProcessor:
             segments = self.segments.get(name)
         else:
             segments = self.get_interval_wave_durations(name)
-        return np.std(segments)
+        std_val = np.nanstd(segments)
+        return std_val
 
     def sd_of_amplitudes(self,wave):
         """
@@ -383,11 +513,13 @@ class SignalProcessor:
         assert wave in ['p_wave', 't_wave', 'qrs_complex'], "Only QRS complex or P or T waves"
         aux_rec = self.record.p_signals
         wave = self.segments.get(wave)
-        apmplitudes = list(map(lambda x: aux_rec[x[1]] - (aux_rec[x[0]] + aux_rec[x[-1]])/2 , wave))
-        return np.std(apmplitudes)
+        apmplitudes = list(map(lambda x: aux_rec[x[1]], wave))
+        std_val = np.nanstd(apmplitudes)
+        return std_val
 
     def sd_of_rr_difs(self): # Maybe delete this one 
-        return np.std(self.rr_difs())
+        res =  np.nanstd(self.rr_difs())
+        return res
 
     #Mean amplitude on left, right and mid segments are (I think the mean of al samples.)
     #Use pywavelets for the wavelet
@@ -397,48 +529,140 @@ class SignalProcessor:
         return map(lambda x: self.record.p_signals[x[0]: x[-1] +1], segments)
 
     def mean_amplitude_on_segments(self,segment):
-        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
+        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment),SignalProcessor.INITIALIZER)
         return np.mean(segments)
 
     def variance_amplitude_segments(self,segment):
-        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
+        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment),SignalProcessor.INITIALIZER)
         return np.var(segments)
 
     def skewnes_segment(self, segment):
-        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
+        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment),SignalProcessor.INITIALIZER)
         return sps.skew(segments)[0]
 
     def kurtosis_of_segment(self, segment):
-        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment))
+        segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment),SignalProcessor.INITIALIZER)
         return sps.kurtosis(segments)[0]
 
-    def wavelet_detail_coefs(self, segment):
-        segments = map(SignalProcessor.detail_coefs_of_dwt,self.get_segment(segment))
+    def wavelet_detail_coefs(self, segment, levels = 5):
+        segments = map(lambda x: SignalProcessor.detail_coefs_of_dwt_levels(x.ravel()) ,self.get_segment(segment))
         return segments
 
     def mean_wavelet_detail_coefs(self,segment):
-        segments = reduce(lambda x,y: np.concatenate((x,y)), self.wavelet_detail_coefs(segment))
-        segments = np.array(list(segments))
-        return np.mean(segments)
+        #segments = reduce(lambda x,y: np.concatenate((x,y)), self.wavelet_detail_coefs(segment),SignalProcessor.INITIALIZER)
+        #segments = np.array(list(segments))
+        #try:
+        #    segments = np.concatenate(list(self.wavelet_detail_coefs(segment)))
+        #except:
+        #    return 0
+        map_func = lambda x: list(map(lambda y: np.nanmean(y, axis = None), x))
+        segments = map(map_func, self.wavelet_detail_coefs(segment))
+        segments = list(segments)
+        mean_segs = np.nanmean(segments, axis = 0)
+        try:
+            mean_segs = np.concatenate((mean_segs, np.array([np.nanmean(mean_segs)])),axis = 0)
+        except ValueError:
+            mean_segs = np.array([np.nan for _ in range(7)])
+        return list(mean_segs)
 
     def mean_kurtosis_wavelet_detail_coefs(self,segment):
-        segments = map(lambda x: sps.kurtosis(x), self.wavelet_detail_coefs(segment))
-        segments = filter(lambda x:  not np.isnan(x).any(), segments)
+        map_func = lambda x: list(map(lambda y: sps.kurtosis(y, axis = None), x))
+        segments = map(map_func, self.wavelet_detail_coefs(segment))
         segments = list(segments)
-        return np.mean(segments)
+        mean_segs = np.nanmean(segments, axis = 0)
+        try:
+            mean_segs = np.concatenate((mean_segs, np.array([np.nanmean(mean_segs)])),axis = 0)
+        except ValueError:
+            mean_segs = np.array([np.nan for _ in range(7)])
+        return list(mean_segs)
 
     def mean_skew_wavelet_detail_coefs(self,segment):
-        segments = map(lambda x: sps.skew(x), self.wavelet_detail_coefs(segment))
-        segments = filter(lambda x:  not np.isnan(x).any(), segments)
+        map_func = lambda x: list(map(lambda y: sps.skew(y, axis = None), x))
+        segments = map(map_func, self.wavelet_detail_coefs(segment))
+        #segments = filter(lambda x:  not np.isnan(x).any(), segments)
         segments = list(segments)
-        return np.mean(segments)
+        mean_segs = np.nanmean(segments, axis = 0)
+        try:
+            mean_segs = np.concatenate((mean_segs, np.array([np.nanmean(mean_segs)])),axis = 0)
+        except ValueError:
+            mean_segs = np.array([np.nan for _ in range(7)])
+        #if np.isnan(mean_segs):
+        #    mean_segs = 0
+        return list(mean_segs)
 
     def mean_std_wavelet_detal_coefs(self,segment):
-        segments = map(np.std, self.wavelet_detail_coefs(segment))
-        segments = filter(lambda x:  not np.isnan(x).any(), segments)
+        map_func = lambda x: list(map(lambda y: np.nanstd(y, axis = None), x))
+        segments = map(map_func, self.wavelet_detail_coefs(segment))
+        #segments = filter(lambda x:  not np.isnan(x).any(), segments)
         segments = list(segments)
-        return np.mean(segments)
+        mean_segs = np.nanmean(segments, axis = 0)
+        try:
+            mean_segs = np.concatenate((mean_segs, np.array([np.nanmean(mean_segs)])),axis = 0)
+        except ValueError:
+            mean_segs = np.array([np.nan for _ in range(7)])
+        #if np.isnan(mean_segs):
+        #    mean_segs = 0
+        return list(mean_segs)
 
+    def mean_entropy_for_segment(self, segment):
+        segments = self.get_segment(segment)
+        segments = map(lambda x: SignalProcessor.entropy(x.ravel()), segments)
+        segments = list(segments)
+        return np.nanmean(segments)
+
+    def mean_wavelet_detail_coefs_entropy(self,segment):
+        map_func = lambda x: list(map(lambda y: SignalProcessor.entropy(y),x))
+        segments = list(self.wavelet_detail_coefs(segment))
+        segments = map(map_func, segments)
+        segments = list(segments)
+        mean_segs = np.nanmean(segments, axis = 0)
+
+        ''' aux = []
+        aux_mat = None
+        mean_segs = None
+        nan_sums = None
+        for list_elem in segments:
+            aux.append(list(list_elem))
+            if len(aux) == 2:
+                aux_mat = np.array(aux)
+                if mean_segs is None:
+                    nan_sums = np.sum(~np.isnan(aux_mat),axis= 0)
+                    mean_segs = np.nansum(aux_mat, axis = 0)
+                else:
+                    mean_segs = np.nansum(np.concatenate([mean_segs,aux_mat], axis = 0),axis = 0)
+                    nan_sums += np.sum(~np.isnan(aux_mat), axis= 0)
+                mean_segs = np.reshape(mean_segs,(1,mean_segs.shape[0]))
+                aux = []
+        if aux:
+            aux_mat = np.array(aux)
+            mean_segs = np.nansum(np.concatenate([mean_segs,aux_mat], axis = 0))
+            nan_sums += np.sum(~np.isnan(aux_mat), axis= 0)
+        mean_segs = mean_segs / nan_sums '''
+        try:
+            mean_segs = np.concatenate((mean_segs, np.array([np.nanmean(mean_segs)])),axis = 0)
+        except ValueError:
+            mean_segs = np.array([np.nan for _ in range(7)])
+        return list(mean_segs)
+
+
+    def mean_sample_entropy_for_segment(self,segment):
+        segments = self.get_segment(segment)
+        segments = filter(lambda x: x.shape[0] != 0, segments)
+        segments = map(lambda x: entr.sample_entropy(x.ravel(),1,.2*np.std(x))[0],segments)
+        segments = list(segments)
+        return np.nanmean(segments)
+
+    def mean_sample_entropy_wavelet_detail_coefs(self, segment):
+        map_fun = lambda x: list(map(lambda y: entr.sample_entropy(y,1,np.nanstd(y)*.2)[0],x))
+        segments = self.wavelet_detail_coefs(segment)
+        segments = map(map_fun, segments)
+        segments = list(segments)
+        mean_segs = np.nanmean(segments, axis = 0)
+        try:
+            mean_segs = np.concatenate((mean_segs, np.array([np.nanmean(mean_segs)])),axis = 0)
+        except ValueError:
+            mean_segs = np.array([np.nan for _ in range(7)])
+        return list(mean_segs)
 
 def get_features(sig_processor_object,name):
     feature_list = [name]
@@ -483,25 +707,49 @@ def get_features(sig_processor_object,name):
     feature_list.append(sig_processor_object.kurtosis_of_segment('pr_segment'))
     feature_list.append(sig_processor_object.kurtosis_of_segment('st_segment'))
     feature_list.append(sig_processor_object.kurtosis_of_segment('tp_segment'))
-    feature_list.append(sig_processor_object.mean_wavelet_detail_coefs('pr_segment'))
-    feature_list.append(sig_processor_object.mean_wavelet_detail_coefs('st_segment'))
-    feature_list.append(sig_processor_object.mean_wavelet_detail_coefs('tp_segment'))
-    feature_list.append(sig_processor_object.mean_kurtosis_wavelet_detail_coefs('pr_segment'))
-    feature_list.append(sig_processor_object.mean_kurtosis_wavelet_detail_coefs('st_segment'))
-    feature_list.append(sig_processor_object.mean_kurtosis_wavelet_detail_coefs('tp_segment'))
-    feature_list.append(sig_processor_object.mean_skew_wavelet_detail_coefs('pr_segment'))
-    feature_list.append(sig_processor_object.mean_skew_wavelet_detail_coefs('st_segment'))
-    feature_list.append(sig_processor_object.mean_skew_wavelet_detail_coefs('tp_segment'))
-    feature_list.append(sig_processor_object.mean_std_wavelet_detal_coefs('pr_segment'))
-    feature_list.append(sig_processor_object.mean_std_wavelet_detal_coefs('st_segment'))
-    feature_list.append(sig_processor_object.mean_std_wavelet_detal_coefs('tp_segment'))
+    feature_list.append(sig_processor_object.mean_entropy_for_segment('pr_segment'))
+    feature_list.append(sig_processor_object.mean_entropy_for_segment('st_segment'))
+    feature_list.append(sig_processor_object.mean_entropy_for_segment('tp_segment'))
+    feature_list.append(sig_processor_object.mean_sample_entropy_for_segment('pr_segment'))
+    feature_list.append(sig_processor_object.mean_sample_entropy_for_segment('st_segment'))
+    feature_list.append(sig_processor_object.mean_sample_entropy_for_segment('tp_segment'))
+    feature_list += sig_processor_object.mean_wavelet_detail_coefs('pr_segment')
+    feature_list += sig_processor_object.mean_wavelet_detail_coefs('st_segment')
+    feature_list += sig_processor_object.mean_wavelet_detail_coefs('tp_segment')
+    feature_list += sig_processor_object.mean_kurtosis_wavelet_detail_coefs('pr_segment')
+    feature_list += sig_processor_object.mean_kurtosis_wavelet_detail_coefs('st_segment')
+    feature_list += sig_processor_object.mean_kurtosis_wavelet_detail_coefs('tp_segment')
+    feature_list += sig_processor_object.mean_skew_wavelet_detail_coefs('pr_segment')
+    feature_list += sig_processor_object.mean_skew_wavelet_detail_coefs('st_segment')
+    feature_list += sig_processor_object.mean_skew_wavelet_detail_coefs('tp_segment')
+    feature_list += sig_processor_object.mean_std_wavelet_detal_coefs('pr_segment')
+    feature_list += sig_processor_object.mean_std_wavelet_detal_coefs('st_segment')
+    feature_list += sig_processor_object.mean_std_wavelet_detal_coefs('tp_segment')
+    feature_list += sig_processor_object.mean_wavelet_detail_coefs_entropy('pr_segment')
+    feature_list += sig_processor_object.mean_wavelet_detail_coefs_entropy('st_segment')
+    feature_list += sig_processor_object.mean_wavelet_detail_coefs_entropy('tp_segment')
+    feature_list += sig_processor_object.mean_sample_entropy_wavelet_detail_coefs('pr_segment')
+    feature_list += sig_processor_object.mean_sample_entropy_wavelet_detail_coefs('st_segment')
+    feature_list += sig_processor_object.mean_sample_entropy_wavelet_detail_coefs('tp_segment')
+    feature_list.append(sig_processor_object.zero_crossing_rate())
     return feature_list
+
+def stringify_features(element):
+    elem = str(element)
+    if elem =='nan': 
+        elem = ''
+    elif elem =='inf':
+        elem = '1000000'
+    elif elem =='-inf':
+        elem = '-1000000'
+    return elem
 
 
 if __name__ == "__main__":
     args = parser.parse_args()
     dir_file = args.file_path
     list_files = []
+    place_holder_names = [ 'Aproximation'] + [ "Level: " + str(i) for i in range(5,0,-1)] + ["Mean Levels"]
     field_names = [
         "file name",
         "PR interval duration entropy",
@@ -543,20 +791,34 @@ if __name__ == "__main__":
         "Kurtosis of amplitude on left segment ",
         "Kurtosis of amplitude on mid segment",
         "Kurtosis of amplitude on right segment",
-        "Mean wavelet detail coeficient on left segment",
-        "Mean wavelet detail coeficient on mid segment",
-        "Mean wavelet detail coeficient on right segment",
-        "Mean kurtosis on wavelet detail coeficient on left seg.",
-        "Mean kurtosis on wavelet detail coeficient on mid seg.",
-        "Mean kurtosis on wavelet detail coeficient on right seg.",
-        "Mean skew on wavelet detail coeficient on left segment",
-        "Mean skew on wavelet detail coeficient on mid segment",
-        "Mean skew on wavelet detail coeficient on right segment",
-        "Mean std of wavelet detail coefficients from left seg",
-        "Mean std of wavelet detail coefficients from mid seg",
-        "Mean std of wavelet detail coefficients from right seg",
+        "Mean Entropy on left segment",
+        "Mean Entropy on mid segment",
+        "Mean Entropy on right segment",
+        "Mean sample entropy on left segment",
+        "Mean sample entropy on mid segment",
+        "Mean sample entropy on right segment"
+    ] \
+    + [ "Mean wavelet detail coeficient on left segment" + i for i in place_holder_names ] \
+    + [ "Mean wavelet detail coeficient on mid segment" + i for i in place_holder_names ] \
+    + [ "Mean wavelet detail coeficient on right segment" + i for i in place_holder_names ] \
+    + [ "Mean kurtosis on wavelet detail coeficient on left seg. " + i for i in place_holder_names ] \
+    + [ "Mean kurtosis on wavelet detail coeficient on mid seg." + i for i in place_holder_names ] \
+    + [ "Mean kurtosis on wavelet detail coeficient on right seg." + i for i in place_holder_names ] \
+    + [ "Mean skew on wavelet detail coeficient on left segment" + i for i in place_holder_names ] \
+    + [ "Mean skew on wavelet detail coeficient on mid segment" + i for i in place_holder_names ] \
+    + [ "Mean skew on wavelet detail coeficient on right segment" + i for i in place_holder_names ] \
+    + [ "Mean std of wavelet detail coefficients from left seg" + i for i in place_holder_names ] \
+    + [ "Mean std of wavelet detail coefficients from mid seg" + i for i in place_holder_names ] \
+    + [ "Mean std of wavelet detail coefficients from right seg" + i for i in place_holder_names ] \
+    + [ "Mean entropy on wavelet detail coefficients from left seg" + i for i in place_holder_names ] \
+    + [ "Mean entropy on wavelet detail coefficients from mid seg" + i for i in place_holder_names ] \
+    + [ "Mean entropy on wavelet detail coefficients from right seg" + i for i in place_holder_names ] \
+    + [ "Mean sample entropy on wavelet detail coefficients from left seg" + i for i in place_holder_names ] \
+    + [ "Mean sample entropy on wavelet detail coefficients from mid seg" + i for i in place_holder_names ] \
+    + [ "Mean sample entropy on wavelet detail coefficients from right seg" + i for i in place_holder_names ]
+    field_names.append("Zero crossing rate")
+    field_names.append("Class")
 
-    ]
     SEPARATOR = ','
     print_file = stdout
     if args.output_file:
@@ -566,22 +828,30 @@ if __name__ == "__main__":
         list_files = listdir()
         list_files = map(lambda x: x[:-4],filter(lambda x: re.match('.*\.hea',x), list_files))
         list_files = list(np.unique(list(list_files)))
+        pathology_file = open('../REFERENCE-v3.csv','r')
         for item in list_files:
             print('Processing file: ' + item)
-            try:
-                spobj = SignalProcessor(item)
-                spobj.detect_segments()
-                features = get_features(spobj,item)
-                features = list(map(str,features))
-                print(SEPARATOR.join(features), file = print_file)
-            except Exception:
-                pass
+            line = pathology_file.readline()
+            label = line.split(',')
+            label = label[-1].strip('\n')
+            #try:
+            spobj = SignalProcessor(item)
+            #spobj.detect_segments()
+            spobj.detect_segments_new()
+            features = get_features(spobj,item)
+            features = list(map(stringify_features,features))
+            features.append(label)
+            print(SEPARATOR.join(features), file = print_file)
+            #except Exception as e:
+            #    print("Error with file: "+item+"\n"+str(e))
+                
 
     else:
         item = dir_file
         print('Processing file: ' + item)
         spobj = SignalProcessor(item)
-        spobj.detect_segments()
+        #spobj.detect_segments()
+        spobj.detect_segments_new()
         features = get_features(spobj,item)
         features = list(map(str,features))
         print(SEPARATOR.join(features), file = print_file)
