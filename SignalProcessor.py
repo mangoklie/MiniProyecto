@@ -2,16 +2,20 @@ import subprocess
 import wfdb
 import numpy as np
 import scipy.stats as sps
+from scipy.interpolate import interp1d as nox
 import pywt
 import argparse
 import re
+from entropy import shannon_entropy
+import sampen as smp
 from pyentrp import entropy as entr
 from os.path import exists, isdir
 from os import listdir
 from sys import stdout, stderr
-from functools import reduce
+from functools import reduce, lru_cache
 import json
 import sys
+import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-f','--file_path', help = "path to the file or directory to be oppened the saved labels MUST be in this directory", default = './')
@@ -23,34 +27,26 @@ class SignalProcessor:
     END_WAVE = ')'
     CM_PER_SAMPLE =  2.5/300
     INITIALIZER = np.array([[0]])
-    
-    @staticmethod
-    def SampEn(U, m = 2, r = .2):
-
-        def _maxdist(x_i, x_j):
-            return max([abs(ua - va) for ua, va in zip(x_i, x_j)])
-
-        def _phi(m):
-            x = [[U[j] for j in range(i, i + m - 1 + 1)] for i in range(N - m + 1)]
-            C = [(len([1 for x_j in x if _maxdist(x_i, x_j) <= r])) - 1 for x_i in x]
-            return sum(C)
-
-        N = len(U)
-        if N < 2:
-            return np.nan
-        return np.log(_phi(m)/_phi(m+1))
+        
 
     @staticmethod
     def entropy(segments):
         try:
-            hist, bin_edges = np.histogram(segments,'auto')
+            ''' hist, bin_edges = np.histogram(segments,'auto')
             bin_map_pr_interval = np.digitize(segments,bin_edges[:-1])
             bin_map_pr_interval = np.array(list(map(lambda x: hist[x-1]/len(segments), bin_map_pr_interval)))
-            return sps.entropy(bin_map_pr_interval, base = 2)
+            return sps.entropy(bin_map_pr_interval, base = 2) '''
+            return shannon_entropy(segments)
         except Exception as e:
             print(str(e), file = sys.stderr)
             return 0.0
 
+    @staticmethod
+    def estimate(segments, n_points = 32):
+        len_seg = segments.shape[0]
+        points = np.linspace(0,len_seg,len_seg)
+        fun = nox(points,segments)
+        return fun(np.linspace(0,len_seg,n_points))
     
     @staticmethod
     def detail_coefs_of_dwt(segment):
@@ -67,10 +63,21 @@ class SignalProcessor:
         try:
             coefs = pywt.wavedec(segment,'haar', level = levels)
         except ValueError:
-            coefs = SignalProcessor.detail_coefs_of_dwt_levels(segment,levels-1)
-            coefs.insert(1,np.array([]))
-            coefs[0] = np.array([])
+            if segment.shape[0] > 0:
+                coefs = pywt.wavedec(SignalProcessor.estimate(segment),'haar', level = levels)
+            else:
+                #coefs = SignalProcessor.detail_coefs_of_dwt_levels(segment,levels-1)
+                #coefs.insert(1,np.array([]))
+                #coefs[0] = np.array([])
+                coefs = [np.array([])] * 6
         return coefs
+
+    @staticmethod
+    def sampen_wavelet_coefs(y):
+        try:
+            return smp.sampen2(list(y)[:300],1, normalize=True)[1][1]
+        except (ValueError, ZeroDivisionError):
+            return np.nan
 
     @staticmethod
     def analyze_wave_seg(wave_seg):
@@ -284,6 +291,7 @@ class SignalProcessor:
         expecting = None
         symbols_expecting = None
         end_wave_reached = False
+        t_wave_inversion = [0,0]
         for element in annots:
             if element[1] == SignalProcessor.START_WAVE and not expecting:
                 aux_list.append(element)
@@ -320,7 +328,7 @@ class SignalProcessor:
                         aux_list = []
                     else: 
                         continue
-            
+
 
 
     def calculate_heart_rate(self):
@@ -394,43 +402,48 @@ class SignalProcessor:
     
     #Mean entropy for PR interval durations
     def get_pr_interval_durations_entropy(self):
-        pr_intervals = self.get_pr_intervals()
-        hist, bin_edges = np.histogram(pr_intervals,'auto')
+        pr_intervals = self.get_pr_intervals().ravel()
+        ''' hist, bin_edges = np.histogram(pr_intervals,'auto')
         bin_map_pr_interval = np.digitize(pr_intervals,bin_edges[:-1])
-        bin_map_pr_interval = np.array(list(map(lambda x: hist[x-1]/len(pr_intervals), bin_map_pr_interval)))
-        return sps.entropy(bin_map_pr_interval, base = 2)
+        bin_map_pr_interval = np.array(list(map(lambda x: hist[x-1]/len(pr_intervals), bin_map_pr_interval))) '''
+        #return sps.entropy(bin_map_pr_interval, base = 2)
+        return shannon_entropy(pr_intervals)
     
     #Mean entropy por P wave durations
     def get_p_wave_durations_entropy(self):
-        p_wave_durations = self.get_p_wave_durations()
-        hist, bin_edges = np.histogram(p_wave_durations, 'auto')
+        p_wave_durations = self.get_p_wave_durations().ravel()
+        ''' hist, bin_edges = np.histogram(p_wave_durations, 'auto')
         bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
-        bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves)))
-        return sps.entropy(bin_map_p_waves, base = 2)
+        bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves))) '''
+        #return sps.entropy(bin_map_p_waves, base = 2)
+        return shannon_entropy(p_wave_durations)
 
     #Mean entropy for QT intervals
     def get_qt_interval_entropy(self):
-        p_wave_durations = self.get_qt_interval_durations()
-        hist, bin_edges = np.histogram(p_wave_durations, 'auto')
+        p_wave_durations = self.get_qt_interval_durations().ravel()
+        ''' hist, bin_edges = np.histogram(p_wave_durations, 'auto')
         bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
-        bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves)))
-        return sps.entropy(bin_map_p_waves, base = 2)
+        bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves))) '''
+        #return sps.entropy(bin_map_p_waves, base = 2)
+        return shannon_entropy(p_wave_durations)
     
     #Mean entropy of rr interval durations
     def get_rr_interval_durations_entropy(self):
         p_wave_durations = self.segments.get('rr_interval')
-        hist, bin_edges = np.histogram(p_wave_durations, 'auto')
+        ''' hist, bin_edges = np.histogram(p_wave_durations, 'auto')
         bin_map_p_waves = np.digitize(p_wave_durations, bin_edges[:-1])
-        bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves)))
-        return sps.entropy(bin_map_p_waves, base = 2)
+        bin_map_p_waves = np.array(list(map(lambda x: hist[x-1]/len(p_wave_durations), bin_map_p_waves))) '''
+        #return sps.entropy(bin_map_p_waves, base = 2)
+        return shannon_entropy(p_wave_durations)
 
     #Mean Entropy of T wave durations
     def get_t_wave_durations_entropy(self):
-        t_wave_durations = self.get_t_wave_durations()
-        hist, bin_edges = np.histogram(t_wave_durations, 'auto')
+        t_wave_durations = self.get_t_wave_durations().ravel()
+        ''' hist, bin_edges = np.histogram(t_wave_durations, 'auto')
         bin_map_t_waves = np.digitize(t_wave_durations, bin_edges[:-1])
-        bin_map_t_waves = np.array(list(map(lambda x: hist[x-1]/len(t_wave_durations), bin_map_t_waves)))
-        return sps.entropy(bin_map_t_waves, base = 2)
+        bin_map_t_waves = np.array(list(map(lambda x: hist[x-1]/len(t_wave_durations), bin_map_t_waves))) '''
+        #return sps.entropy(bin_map_t_waves, base = 2)
+        return shannon_entropy(t_wave_durations)
 
     # Area under highest frequency of RR durations (?)
     # Area under lowest frequency of RR durations (?)
@@ -527,11 +540,13 @@ class SignalProcessor:
     def get_segment(self,segment):
         segments = self.segments.get(segment)[:]
         return map(lambda x: self.record.p_signals[x[0]: x[-1] +1], segments)
-
+    
+    @lru_cache(maxsize = 10)
     def mean_amplitude_on_segments(self,segment):
         segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment),SignalProcessor.INITIALIZER)
         return np.mean(segments)
-
+    
+    @lru_cache(maxsize = 10)
     def variance_amplitude_segments(self,segment):
         segments = reduce(lambda x,y: np.concatenate((x,y)), self.get_segment(segment),SignalProcessor.INITIALIZER)
         return np.var(segments)
@@ -648,21 +663,71 @@ class SignalProcessor:
     def mean_sample_entropy_for_segment(self,segment):
         segments = self.get_segment(segment)
         segments = filter(lambda x: x.shape[0] != 0, segments)
-        segments = map(lambda x: entr.sample_entropy(x.ravel(),1,.2*np.std(x))[0],segments)
-        segments = list(segments)
-        return np.nanmean(segments)
+        try:
+            segments = np.concatenate(list(segments))
+        except ValueError:
+            return np.nan
+        ''' segments = map(lambda x: entr.sample_entropy(x.ravel(),1,.2*np.nanstd(x))[0],segments)
+        segments = list(segments) '''
+        try:
+            return smp.sampen2(list(segments.ravel())[:300],1,normalize=True)[1][1]
+        except (ValueError, ZeroDivisionError):
+            return np.nan
 
     def mean_sample_entropy_wavelet_detail_coefs(self, segment):
-        map_fun = lambda x: list(map(lambda y: entr.sample_entropy(y,1,np.nanstd(y)*.2)[0],x))
-        segments = self.wavelet_detail_coefs(segment)
-        segments = map(map_fun, segments)
+        segments = reduce(lambda x,y: map(lambda z: np.concatenate(z),zip(x,y)),
+            self.wavelet_detail_coefs(segment), 
+            [np.array([])]*6)
+        segments = map(lambda y: SignalProcessor.sampen_wavelet_coefs(y),segments)
         segments = list(segments)
-        mean_segs = np.nanmean(segments, axis = 0)
+        try:
+            return segments + [np.nanmean(segments)]
+        except (ValueError, TypeError):
+            return [np.nan]*7
+        ''' mean_segs = np.nanmean(segments, axis = 0)
         try:
             mean_segs = np.concatenate((mean_segs, np.array([np.nanmean(mean_segs)])),axis = 0)
         except ValueError:
             mean_segs = np.array([np.nan for _ in range(7)])
-        return list(mean_segs)
+        return list(mean_segs) '''
+
+     def get_qrs_waves(self,points):
+        assert len(points) == 3, "3 points are required"
+        inverted = self.wave_inverted('qrs_complex')
+        comp_fun = None
+        delta= points[-1]-points[0]
+        if inverted:
+            comp_fun = np.argmax
+        else:
+            comp_fun = np.argmin
+        mini_max_index = comp_fun(self.record.p_signals[points[0]: points[1]])
+        q_wave = mini_max_index + points[0]
+        mini_max_index = comp_fun(self.record.p_signals[points[1]:points[-1]])
+        s_wave = mini_max_index + points[0]
+        return q_wave, points[1], s_wave
+
+        def pqrst_waves(self):
+        """
+        Fetches the P waves, QRS Complexes and T waves peaks. The result is the 
+        sample index.
+        """
+        transform_fun = lambda x: p[1]
+        waves = [list(map(transform_fun,self.segments['p_wave'])),
+            list(map(transform_fun,self.segments['t_wave']))]
+        qrs_waves = map(get_qrs_waves,self.segments['qrs_complex'])
+        q_waves = []
+        r_waves = []
+        s_waves = []
+        for q,r,s  in qrs_waves:
+            q_waves.append(q)
+            r_waves.append(r)
+            s_waves.append(s)
+        waves.insert(1,s_waves)
+        waves.insert(1,r_waves)
+        waves.insert(1,q_waves)
+        return waves
+        
+
 
 def get_features(sig_processor_object,name):
     feature_list = [name]
@@ -672,6 +737,9 @@ def get_features(sig_processor_object,name):
     feature_list.append(sig_processor_object.get_p_wave_durations_entropy())
     feature_list.append(sig_processor_object.get_qt_interval_entropy())
     feature_list.append(sig_processor_object.get_t_wave_durations_entropy())
+    feature_list.append(sig_processor_object.wave_inverted('p_wave'))
+    feature_list.append(sig_processor_object.wave_inverted('qrs_complex'))
+    feature_list.append(sig_processor_object.wave_inverted('t_wave'))
     feature_list.append(aux)
     feature_list.append(sig_processor_object.mean_duration_of_interval('pr_interval'))
     feature_list.append(sig_processor_object.mean_duration_of_interval('p_wave'))
@@ -756,6 +824,9 @@ if __name__ == "__main__":
         "P wave duration entropy",
         "QT interval duration entropy",
         "T wave duration entropy",
+        'P wave inverted',
+        "QRS inverted",
+        "T wave inverted",
         "Heart rate",
         "Mean duration or PR interval",
         "Mean duration of P wave",
@@ -822,7 +893,7 @@ if __name__ == "__main__":
     SEPARATOR = ','
     print_file = stdout
     if args.output_file:
-        print_file = open(args.output_file + '.csv','w')
+        print_file = open(args.output_file,'w')
     print(SEPARATOR.join(field_names),file = print_file)
     if dir_file == './':
         list_files = listdir()
@@ -834,19 +905,20 @@ if __name__ == "__main__":
             line = pathology_file.readline()
             label = line.split(',')
             label = label[-1].strip('\n')
-            #try:
-            spobj = SignalProcessor(item)
-            #spobj.detect_segments()
-            spobj.detect_segments_new()
-            features = get_features(spobj,item)
-            features = list(map(stringify_features,features))
-            features.append(label)
-            print(SEPARATOR.join(features), file = print_file)
-            #except Exception as e:
-            #    print("Error with file: "+item+"\n"+str(e))
+            try:
+                spobj = SignalProcessor(item)
+                #spobj.detect_segments()
+                spobj.detect_segments_new()
+                features = get_features(spobj,item)
+                features = list(map(stringify_features,features))
+                features.append(label)
+                print(SEPARATOR.join(features), file = print_file)
+            except Exception as e:
+                print("Error with file: "+item+"\n"+str(e), file = sys.stderr)
                 
 
     else:
+        ti = time.time()
         item = dir_file
         print('Processing file: ' + item)
         spobj = SignalProcessor(item)
@@ -855,6 +927,8 @@ if __name__ == "__main__":
         features = get_features(spobj,item)
         features = list(map(str,features))
         print(SEPARATOR.join(features), file = print_file)
+        tf = time.time()
+        print("Elapsed time: " + str(tf-ti)+"s")
 
     
     if args.output_file:
