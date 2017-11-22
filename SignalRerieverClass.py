@@ -63,6 +63,19 @@ class ImageSignalDigitalizer():
         return bn_src
 
     @staticmethod
+    def bw_transform_special(img):
+        #Tratamiento especial para imágenes
+        image = rgb2gray(img)
+        image = invert(image)
+        image = adjust_gamma(image,2)
+        image = adjust_sigmoid(image, .95)
+        threshold_image = threshold_otsu(image)
+        image = image > threshold_image
+        return image
+        
+
+
+    @staticmethod
     def detect_and_erase_text(img):
         image = img.copy()
         image = restoration.denoise_tv_chambolle(image, weight=0.1)
