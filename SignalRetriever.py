@@ -48,11 +48,11 @@ class SignalRetriever():
         plt.show()
 
     @staticmethod
-    def sample_signal(inter_func,xpoints):
+    def sample_signal(inter_func,xpoints,samples = 9000):
         # Guardando archivo de la señal. 
         minp = np.min(xpoints)
         maxp = np.max(xpoints)
-        x = np.linspace(minp,maxp,9000)
+        x = np.linspace(minp,maxp,samples)
         xs = inter_func(x)
         #xs -= np.mean(xs)
         xs /= np.max(np.abs(xs))
@@ -86,8 +86,11 @@ class SignalRetriever():
                 self.file_name = coordinates_file
             else:
                 raise TypeError('The following path: ' + coordinates_file + ' is not a regular file')
+        elif kwargs.get('array'):
+            self.coordinates_file = kwargs.get('array')
+            self.file_name = kwargs.get('arr_name','temp')
     
-    def get_record_signal(self, path):
+    def get_record_signal(self, path = ''):
         # record = wfdb.Record(recordname='Test'+str(i),fs=300,nsig=1,siglen=750,p_signals=x,
         # filename=['test.dat'],baseline=[50],units=['mV'],signame=['ECG'],adcgain=[200],fmt=['16'],checksum=[0],
         # adcres=[16],adczero=[0],initvalue=[0],blocksize=[0], d_signals=None)
