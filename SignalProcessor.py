@@ -10,11 +10,11 @@ from entropy import shannon_entropy
 import sampen as smp
 from pyentrp import entropy as entr
 from os.path import exists, isdir
-from os import listdir
+from os import listdir, devnull
 from sys import stdout, stderr
 from functools import reduce, lru_cache
-import json
 import sys
+import json
 import time
 
 parser = argparse.ArgumentParser()
@@ -691,7 +691,7 @@ class SignalProcessor:
             mean_segs = np.array([np.nan for _ in range(7)])
         return list(mean_segs) '''
 
-     def get_qrs_waves(self,points):
+    def get_qrs_waves(self,points):
         assert len(points) == 3, "3 points are required"
         inverted = self.wave_inverted('qrs_complex')
         comp_fun = None
@@ -706,7 +706,7 @@ class SignalProcessor:
         s_wave = mini_max_index + points[0]
         return q_wave, points[1], s_wave
 
-        def pqrst_waves(self):
+    def pqrst_waves(self):
         """
         Fetches the P waves, QRS Complexes and T waves peaks. The result is the 
         sample index.
@@ -817,6 +817,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     dir_file = args.file_path
     list_files = []
+    sys.stderr = open(devnull,'w')
     place_holder_names = [ 'Aproximation'] + [ "Level: " + str(i) for i in range(5,0,-1)] + ["Mean Levels"]
     field_names = [
         "file name",
@@ -914,7 +915,7 @@ if __name__ == "__main__":
                 features.append(label)
                 print(SEPARATOR.join(features), file = print_file)
             except Exception as e:
-                print("Error with file: "+item+"\n"+str(e), file = sys.stderr)
+                print("Error with file: "+item+"\n"+str(e), file = stdout)
                 
 
     else:

@@ -125,7 +125,7 @@ class ImageSignalDigitalizer():
             args = info
         self.image_src_colection = args
 
-    def process_images(self):
+    def process_images(self, param = .85):
         if self.config_file:
             for simg in self.image_src_colection:
                 img = imread(self.directory + simg.get('name'))
@@ -135,7 +135,7 @@ class ImageSignalDigitalizer():
         else:
             for simg in self.image_src_colection:
                 img = imread(simg)
-                image = ImageSignalDigitalizer.process_image(img)
+                image = ImageSignalDigitalizer.process_image(img, param)
                 yield(image, simg)
 
 

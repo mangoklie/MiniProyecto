@@ -109,7 +109,7 @@ if __name__ == "__main__":
     for image_item in items_iterator:
         image, name = image_item
         object_detect(bn_path = bw_path+name, patch_dir = patch_dir+name, clusters_path = cluster_path+name, image_path = images_path + name )
-        signal_create(cluster_path + name, output_dir + name)
+        signal_create(cluster_path + name[:-3]+'npy', output_dir + name)
 
     
     
