@@ -40,15 +40,15 @@ El archivo contiene una clase encargada de realizar la transformación de imagen
 
 Contiene una clase encargada de eliminar (en lo posible) el texto de las imágenes. También se encarga de obtener las coordenadas de los pixeles que representan la señal. Al ejecutar ```python ObjectDetector.py --help````se obtendra una lista de las posibles opciones que el script ofrece. 
 
-..* 'file_path', "Ruta del archivo o de los archivos a transformar"
- ..* '-i', '--imagepath',  "Guardar las imagenes etiquetadas en un directorio"
-..* '-imd', '--imagedir',  "Directorio donde colocar la imagen etiquetada" 
-..* '-p', '--patch',  "Realiza el cubrimiento de lar regiones consideradas ruidosas (texto)"
-..* '-pd', '--patchdir',  "Ubicación de las imagenes ajustadas"
-..* '-e', '--expand',  "Expandir la señal cuando se haga el ajuste"
-..* '-c','--cluster',  "Una vez ajustadas realizar agrupamieno de los píxeles que representen la señal (Toma tiempo)"
-..* '-cd', '--clusterdir',  "Directorio donde guardar los pixeles seleccionados"
-..* '--use_patched',  "Al realizar agrupamiento esta opción carga las imagenes que se encuentren en patch dir (deben coincidir los nombres"
+* 'file_path', "Ruta del archivo o de los archivos a transformar"
+* '-i', '--imagepath',  "Guardar las imagenes etiquetadas en un directorio"
+* '-imd', '--imagedir',  "Directorio donde colocar la imagen etiquetada" 
+* '-p', '--patch',  "Realiza el cubrimiento de lar regiones consideradas ruidosas (texto)"
+* '-pd', '--patchdir',  "Ubicación de las imagenes ajustadas"
+* '-e', '--expand',  "Expandir la señal cuando se haga el ajuste"
+* '-c','--cluster',  "Una vez ajustadas realizar agrupamieno de los píxeles que representen la señal (Toma tiempo)"
+* '-cd', '--clusterdir',  "Directorio donde guardar los pixeles seleccionados"
+* '--use_patched',  "Al realizar agrupamiento esta opción carga las imagenes que se encuentren en patch dir (deben coincidir los nombres"
 
 ## El archivo SignalRetriever
 
