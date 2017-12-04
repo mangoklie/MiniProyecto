@@ -105,7 +105,10 @@ if __name__ == "__main__":
     load_patched = args.load_patched
     cluster_path = handle_dirs(args.cluster_path,'./cluster_dir/')
     cparam = args.contrast_param
-    items_iterator = bw_process(file_path,bw_path, float(cparam))
+    if cparam is None:
+        items_iterator = bw_process(file_path,bw_path)
+    else:
+        items_iterator = bw_process(file_path,bw_path, float(cparam))
     for image_item in items_iterator:
         image, name = image_item
         object_detect(bn_path = bw_path+name, patch_dir = patch_dir+name, clusters_path = cluster_path+name, image_path = images_path + name )
