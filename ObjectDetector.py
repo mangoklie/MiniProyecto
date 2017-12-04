@@ -47,7 +47,8 @@ class ObjectDetector(object):
     
     def __init__(self, *args, **kwargs):
         if len(args) == 0:
-            raise TypeError('No arguments provided')
+            #raise TypeError('No arguments provided')
+            pass
         elif len(args) == 1:
             self.img_src = imread(args[0])
             self.regions = []
@@ -120,7 +121,7 @@ class ObjectDetector(object):
             counter += 1
         return np_matrix[:counter, :].copy()
 
-    def get_object_detected_image(self, l_image):
+    def get_object_detected_image(self, l_image, expand = False):
         """
             Colorizes the image and puts a rectangle around the different zones 
             considered to be noisy. 
@@ -291,24 +292,19 @@ def process_bn_image(file_path,**kwargs):
         of  different regions, filtering the desired ones, create a region labeled image and deleting 
         the regions considered to be noisy.
     """
-    matrix_path = kwargs.get('matrix_path')
     image_path = kwargs.get('image_path')
     patch_dir = kwargs.get('patch_dir')
     clusters_path = kwargs.get("clusters_path")
     expand = kwargs.get('expand',False)
     load_patched = kwargs.get('load_patched')
-    object_detector = ObjectDetector(file_path)
+    object_detector = kwargs.get('object_detector',ObjectDetector(file_path))
     regions_path = file_path[:-3] + 'npy'
-    if regions_path and (matrix_path or image_path or (clusters_path and not load_patched) or patch_dir ):
+    if regions_path and ( image_path or (clusters_path and not load_patched) or patch_dir ):
         try:
             labeled_image = np.load(regions_path)
         except IOError:
             labeled_image = object_detector.object_detect()
             np.save(regions_path,labeled_image)
-        
-    if matrix_path:
-        object_detected_matrix = object_detector.generate_matrix(labeled_image)
-        np.save(matrix_path,object_detected_matrix)
     
     if image_path:
         imsave(image_path,object_detector.get_object_detected_image(labeled_image, expand = expand))
@@ -340,6 +336,7 @@ def process_bn_image(file_path,**kwargs):
                 rr, cc = circle(r = center[0], c = center[1], radius = 2, shape =  small_patched.shape)
                 l_im[rr,cc] = (0,0,1)
             imsave(clusters_path,l_im)
+        print("saving")
         np.save(clusters_path[:-4],centers)
     elif patch_dir:
         imsave(patch_dir,object_detector.patch(labeled_image,expand = expand))

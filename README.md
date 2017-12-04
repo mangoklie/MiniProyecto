@@ -54,5 +54,20 @@ Contiene una clase encargada de eliminar (en lo posible) el texto de las imágen
 
 Contiene una clase encargada de transformar los archivos de puntos obtenidos en el agrupamiento para generar la señal. El script realiza las transformaciones de las imagenes en la señal especificadas y si hay un directorio de salida los debería colocar en este. Ejecutar ```python SignalRetriever.py --help``` para mayor información.
 
+## El archivo SignalProcessor
+
+Contiene una clase encargada de extraer todos los atributos de una señal. Adicionalmente contiene un Script que recibe el nombre de una señal, la procesa y devuelve los atributos obtenidos en la consola o en algún archivo de salida
+
+Es importante decir que el Script se debe ejecutar en el mismo directorio donde se encuentran los archivos de las señales pues de lo contrario NO FUNCIONARÁ. Esto se debe a que la biblioteca wfdb busca los archivos en directorios específicos y no se implementó esta modalidad. 
+
+Para ayuda sobre las opciones que este script ofrece ejecute ``` python SignalProcessor.py --help```.
+
+Para extraer los atributos de los archivos de todo un directorio realizar:
+
+```bash
+cd /ruta/al/directorio/de/los/arcchivos
+python /ruta/al/script/SignalProcessor.py -f ./ -o /ruta/al/archivo/de/salida
+```
+
 
 
