@@ -69,5 +69,7 @@ cd /ruta/al/directorio/de/los/arcchivos
 python /ruta/al/script/SignalProcessor.py -f ./ -o /ruta/al/archivo/de/salida
 ```
 
+NOTA: El archivo REFERENCE-v3.csv debe estar en la carpeta padre de donde residen los archivos de señales.
+
 
 
