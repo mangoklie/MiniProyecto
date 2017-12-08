@@ -35,7 +35,7 @@ def bw_process(file, bw_path, param = .85):
         for x in image_digitalizer.process_images():
             image = img_as_uint(x[0])
             imsave(temp_name.format(x[1][:-4]), image)
-            yield(image,x[1])
+            yield(image,'bn_' + x[1][:-4]+'.png')
     else:
         last_name_file = file.split('/')[-1]
         image = imread(file)
