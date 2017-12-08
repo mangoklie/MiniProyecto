@@ -6,7 +6,7 @@ from scipy.interpolate import interp1d as nox
 import pywt
 import argparse
 import re
-#from entropy import shannon_entropy
+from entropy import shannon_entropy
 import sampen as smp
 from pyentrp import entropy as entr
 from os.path import exists, isdir
@@ -17,7 +17,6 @@ import sys
 import json
 import time
 
-shannon_entropy = entr.shannon_entropy
 parser = argparse.ArgumentParser()
 parser.add_argument('-f','--file_path', help = "path to the file or directory to be oppened the saved labels MUST be in this directory", default = './')
 parser.add_argument('-o','--output_file', help = "Output file", default = None)
